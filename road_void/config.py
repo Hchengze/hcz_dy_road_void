@@ -68,6 +68,12 @@ class CavityConfig:
     attenuation_strength: float = 0.25
     tail_strength: float = 1.0
     label: str = "疑似空洞"
+    shape: str = "sphere"
+    size_x: float | None = None
+    size_y: float | None = None
+    size_z: float | None = None
+    azimuth: float = 0.0
+    anomalies: str | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +89,7 @@ class VelocityConfig:
     velocity_model_type: str = "uniform"
     layer_depths: tuple[float, ...] = (0.5, 2.0, 6.0)
     layer_velocities: tuple[float, ...] = (320.0, 260.0, 220.0)
+    sensitivity_depth_factor: float = 0.5
     source_frequency: float = 35.0
     wavelet_type: str = "ricker"
     bandpass_freqmin: float = 10.0
@@ -145,6 +152,9 @@ class ProcessingConfig:
     score_method: str = "envelope"
     top_k: int = 8
     uncertainty_threshold: float = 0.92
+    scan_mode: str = "joint"
+    shot_index: int | None = None
+    shot_weight_mode: str = "uniform"
 
 
 @dataclass(frozen=True)
@@ -183,6 +193,13 @@ class RoadVoidConfig:
         c = self.cavity
         if not c.enable_cavity:
             return []
+        if c.anomalies:
+            return _parse_anomaly_specs(
+                c.anomalies,
+                attenuation_strength=c.attenuation_strength,
+                tail_strength=c.tail_strength,
+                diffraction_strength=self.noise.diffraction_strength,
+            )
         return [
             Cavity(
                 x0=c.cavity_x,
@@ -193,14 +210,38 @@ class RoadVoidConfig:
                 attenuation_strength=c.attenuation_strength,
                 tail_strength=c.tail_strength,
                 label=c.label,
+                shape=c.shape,
+                size_x=c.size_x,
+                size_y=c.size_y,
+                size_z=c.size_z,
+                azimuth=c.azimuth,
             )
         ]
+
+    def effective_rayleigh_velocity(self, reference_velocity: float | None = None) -> float:
+        """返回当前正演/扫描实际使用的等效速度。
+
+        ``uniform`` 直接返回参考速度。``layered-effective`` 会根据主频、波长
+        和层状模型计算 ``VR_eff``，使层状速度能够进入当前运动学走时。
+        """
+
+        ref = self.velocity.rayleigh_velocity if reference_velocity is None else float(reference_velocity)
+        mode = self.velocity.velocity_model_type
+        if mode == "uniform":
+            return float(ref)
+        if mode == "layered-effective":
+            return self.to_velocity_model().effective_velocity(
+                ref,
+                self.velocity.source_frequency,
+                self.velocity.sensitivity_depth_factor,
+            )
+        raise ConfigError("velocity_model_type 只能是 uniform 或 layered-effective。")
 
     def to_forward_config(self) -> ForwardModelConfig:
         """根据配置构建正演参数。"""
 
         return ForwardModelConfig(
-            rayleigh_velocity=self.velocity.rayleigh_velocity,
+            rayleigh_velocity=self.effective_rayleigh_velocity(),
             t0=self.record.t0,
             source_frequency=self.velocity.source_frequency,
             wavelet=self.velocity.wavelet_type,
@@ -219,18 +260,21 @@ class RoadVoidConfig:
         """根据配置构建三维绕射扫描网格。"""
 
         p = self.processing
+        velocity_axis = _arange_inclusive(p.scan_vr_min, p.scan_vr_max, p.scan_vr_step)
+        if self.velocity.velocity_model_type == "layered-effective":
+            velocity_axis = np.asarray([self.effective_rayleigh_velocity(v) for v in velocity_axis], dtype=float)
         return CavityScanGrid(
             x=_arange_inclusive(p.scan_x_min, p.scan_x_max, p.scan_x_step),
             y=_arange_inclusive(p.scan_y_min, p.scan_y_max, p.scan_y_step),
             h=_arange_inclusive(p.scan_h_min, p.scan_h_max, p.scan_h_step),
-            velocity=_arange_inclusive(p.scan_vr_min, p.scan_vr_max, p.scan_vr_step),
+            velocity=velocity_axis,
         )
 
     def to_velocity_model(self) -> LayeredRayleighVelocityModel:
         """构建用于展示的等效瑞雷波速度模型。
 
-        注意：当前 layered 模型主要用于可视化和参数说明；核心正演和扫描
-        仍使用 rayleigh_velocity 这个等效常数速度。
+        注意：uniform 模式返回常速模型；layered-effective 模式会同时用于
+        计算 VR_eff，但它仍是轻量等效走时模型，不是弹性波正演。
         """
 
         if self.velocity.velocity_model_type == "uniform":
@@ -238,8 +282,8 @@ class RoadVoidConfig:
             return LayeredRayleighVelocityModel(
                 layers=(VelocityLayer(0.0, float(depth), self.velocity.rayleigh_velocity, "均匀等效瑞雷速度"),)
             )
-        if self.velocity.velocity_model_type != "layered":
-            raise ConfigError("velocity_model_type 只能是 uniform 或 layered。")
+        if self.velocity.velocity_model_type != "layered-effective":
+            raise ConfigError("velocity_model_type 只能是 uniform 或 layered-effective。")
         depths = tuple(float(v) for v in self.velocity.layer_depths)
         velocities = tuple(float(v) for v in self.velocity.layer_velocities)
         if len(depths) != len(velocities):
@@ -315,6 +359,12 @@ def validate_config(config: RoadVoidConfig) -> None:
         raise ConfigError("通道和震源 x 范围必须满足 max > min。")
     if c.cavity_h < 0 or c.cavity_radius <= 0:
         raise ConfigError("cavity_h 必须非负，cavity_radius 必须为正数。")
+    if v.velocity_model_type not in {"uniform", "layered-effective"}:
+        raise ConfigError("velocity_model_type 只能是 uniform 或 layered-effective。")
+    if len(v.layer_depths) != len(v.layer_velocities):
+        raise ConfigError("layer_depths 和 layer_velocities 长度必须一致。")
+    if v.sensitivity_depth_factor <= 0:
+        raise ConfigError("sensitivity_depth_factor 必须为正数。")
     if v.rayleigh_velocity <= 0 or v.source_frequency <= 0:
         raise ConfigError("rayleigh_velocity 和 source_frequency 必须为正数。")
     if r.sampling_rate <= 2.5 * v.source_frequency:
@@ -330,6 +380,97 @@ def validate_config(config: RoadVoidConfig) -> None:
             raise ConfigError(f"{name} 必须为正数。")
     if p.scan_x_max <= p.scan_x_min or p.scan_y_max <= p.scan_y_min or p.scan_h_max <= p.scan_h_min:
         raise ConfigError("扫描范围必须满足 max > min。")
+    if p.scan_mode not in {"joint", "single-shot", "compare"}:
+        raise ConfigError("scan_mode 必须是 joint、single-shot 或 compare。")
+    if p.shot_weight_mode not in {"uniform", "near-cavity", "snr"}:
+        raise ConfigError("shot_weight_mode 必须是 uniform、near-cavity 或 snr。")
+
+
+def _parse_anomaly_specs(
+    text: str,
+    attenuation_strength: float,
+    tail_strength: float,
+    diffraction_strength: float,
+) -> list[Cavity]:
+    """解析命令行多异常体字符串。
+
+    示例：``sphere:42,8.5,2.2,2.0,1.0;box:58,6,1.5,4,3,1,0.8``。
+    这种格式适合本地研究原型快速改参数，避免重新引入 YAML 主入口。
+    """
+
+    anomalies: list[Cavity] = []
+    for idx, raw_item in enumerate(part.strip() for part in text.split(";")):
+        if not raw_item:
+            continue
+        if ":" not in raw_item:
+            raise ConfigError(f"异常体格式缺少 shape:values: {raw_item}")
+        shape, values_text = raw_item.split(":", 1)
+        shape = shape.strip().lower()
+        values = [float(v.strip()) for v in values_text.split(",") if v.strip()]
+        label = f"{shape}-{idx + 1}"
+        if shape == "sphere":
+            if len(values) != 5:
+                raise ConfigError("sphere 格式为 sphere:x,y,h,radius,strength。")
+            x, y, h, radius, strength = values
+            anomalies.append(_make_cavity(shape, x, y, h, radius, strength, attenuation_strength, tail_strength, diffraction_strength, label))
+        elif shape == "box":
+            if len(values) != 7:
+                raise ConfigError("box 格式为 box:x,y,h,size_x,size_y,size_z,strength。")
+            x, y, h, sx, sy, sz, strength = values
+            anomalies.append(_make_cavity(shape, x, y, h, max(sx, sy, sz) / 2.0, strength, attenuation_strength, tail_strength, diffraction_strength, label, sx, sy, sz))
+        elif shape == "cylinder":
+            if len(values) != 6:
+                raise ConfigError("cylinder 格式为 cylinder:x,y,h,radius,height,strength。")
+            x, y, h, radius, height, strength = values
+            anomalies.append(_make_cavity(shape, x, y, h, radius, strength, attenuation_strength, tail_strength, diffraction_strength, label, radius, radius, height))
+        elif shape == "ellipsoid":
+            if len(values) != 7:
+                raise ConfigError("ellipsoid 格式为 ellipsoid:x,y,h,size_x,size_y,size_z,strength。")
+            x, y, h, sx, sy, sz, strength = values
+            anomalies.append(_make_cavity(shape, x, y, h, max(sx, sy, sz) / 2.0, strength, attenuation_strength, tail_strength, diffraction_strength, label, sx, sy, sz))
+        elif shape in {"line", "zone"}:
+            if len(values) != 6:
+                raise ConfigError("line 格式为 line:x,y,h,length,azimuth,strength。")
+            x, y, h, length, azimuth, strength = values
+            anomalies.append(_make_cavity(shape, x, y, h, length / 2.0, strength, attenuation_strength, tail_strength, diffraction_strength, label, length, None, None, azimuth))
+        else:
+            raise ConfigError(f"未知异常体形状: {shape}")
+    if not anomalies:
+        raise ConfigError("--anomalies 未解析到有效异常体。")
+    return anomalies
+
+
+def _make_cavity(
+    shape: str,
+    x: float,
+    y: float,
+    h: float,
+    radius: float,
+    strength: float,
+    attenuation_strength: float,
+    tail_strength: float,
+    diffraction_strength: float,
+    label: str,
+    size_x: float | None = None,
+    size_y: float | None = None,
+    size_z: float | None = None,
+    azimuth: float = 0.0,
+) -> Cavity:
+    return Cavity(
+        x0=x,
+        y0=y,
+        h=h,
+        radius=max(radius, 0.1),
+        scattering_strength=strength * diffraction_strength,
+        attenuation_strength=attenuation_strength,
+        tail_strength=tail_strength,
+        label=label,
+        shape=shape,
+        size_x=size_x,
+        size_y=size_y,
+        size_z=size_z,
+        azimuth=azimuth,
+    )
 
 
 def _arange_inclusive(start: float, stop: float, step: float) -> np.ndarray:

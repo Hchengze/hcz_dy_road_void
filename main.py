@@ -21,8 +21,10 @@ from pathlib import Path
 from road_void.config import CavityConfig, GeometryConfig, NoiseConfig, ProcessingConfig, RecordConfig, RoadVoidConfig, VelocityConfig
 from road_void.visualization import (
     animate_kinematic_wavefield,
+    plot_kinematic_wavefield_frames,
     plot_diffraction_path_demo,
     plot_geometry_plan_and_sections,
+    plot_multishot_scan_diagnostics,
     plot_road_geometry_3d,
     plot_score_slices,
     plot_shot_gather,
@@ -66,6 +68,8 @@ def add_geometry_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cavity-y", type=float, default=8.5, help="异常体横向位置 y0，单位 m；单侧 DAS 下与深度 h 存在耦合，解释时应给范围。")
     parser.add_argument("--cavity-depth", type=float, default=2.2, help="异常体顶部/主要散射中心深度 h，单位 m；越深绕射到时越晚、能量越弱。")
     parser.add_argument("--cavity-radius", type=float, default=2.0, help="有效异常体半径，单位 m；控制散射影响范围，不代表真实空洞几何边界。")
+    parser.add_argument("--cavity-shape", choices=["sphere", "box", "cylinder", "ellipsoid", "line", "zone"], default="sphere", help="单异常体形状。当前只是等效散射点集合：sphere 近圆形空洞，box 井室/箱涵，cylinder 管线/管沟，ellipsoid 脱空，line/zone 长条松散带。")
+    parser.add_argument("--anomalies", default=None, help="多个异常体输入，例如 'sphere:42,8.5,2.2,2.0,1.0;box:58,6,1.5,4,3,1,0.8'。未提供时使用 --cavity-* 构建一个 sphere。")
     parser.add_argument("--no-cavity", action="store_true", help="关闭空洞散射，用于检查无异常情况下的误报风险。")
 
 
@@ -73,6 +77,10 @@ def add_wave_args(parser: argparse.ArgumentParser) -> None:
     """速度、频率、采样和噪声参数。"""
 
     parser.add_argument("--rayleigh-velocity", type=float, default=240.0, help="等效瑞雷波速度 VR，单位 m/s；t_direct=t0+|S-G|/VR，t_diff=t0+(|S-D|+|D-G|)/VR。VR 偏大可能使深度偏深，偏小可能使深度偏浅。")
+    parser.add_argument("--velocity-mode", choices=["uniform", "layered-effective"], default="uniform", help="速度模式。uniform 使用单一 VR；layered-effective 根据 lambda=VR/f 和指数敏感深度权重把层状速度折算为 VR_eff，并用于正演和扫描走时。")
+    parser.add_argument("--layer-depths", default="0.4,1.5,4.0", help="层底深度列表，单位 m，例如 0.4,1.5,4.0；用于 layered-effective 和速度图。")
+    parser.add_argument("--layer-velocities", default="180,240,320", help="每层等效瑞雷速度，单位 m/s；低频波长长时深层权重更大，高频更受浅层速度控制。")
+    parser.add_argument("--sensitivity-depth-factor", type=float, default=0.5, help="敏感深度因子 alpha；z_sensitive≈alpha*lambda。越大表示面波走时受深层速度影响越明显。")
     parser.add_argument("--source-frequency", type=float, default=35.0, help="锤击主频 f，单位 Hz；波长 lambda=VR/f。频率高分辨率好但衰减强，频率低探测更深但分辨率降低。")
     parser.add_argument("--wavelet", choices=["ricker", "hammer"], default="ricker", help="震源子波类型；ricker 便于教学，hammer 更像短促锤击脉冲。")
     parser.add_argument("--sampling-rate", type=float, default=1000.0, help="采样率，单位 Hz；应明显高于主频两倍，否则高频锤击信号会混叠。")
@@ -107,6 +115,9 @@ def add_scan_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--top-k", type=int, default=8, help="输出前 k 个候选点，用于观察非唯一性和 y-h tradeoff。")
     parser.add_argument("--uncertainty-threshold", type=float, default=0.92, help="不确定性阈值；保留分数超过 max_score*阈值 的候选范围。")
     parser.add_argument("--direct-wave-mute-width", type=float, default=0.04, help="直达波模板拟合/压制半窗宽，单位 s；过宽可能误伤浅部绕射波。")
+    parser.add_argument("--scan-mode", choices=["joint", "single-shot", "compare"], default="joint", help="扫描模式。joint 默认多炮联合；single-shot 只用 --shot-index 指定炮；compare 保留单炮最佳和联合结果用于对比。")
+    parser.add_argument("--shot-index", type=int, default=None, help="single-shot 模式使用的炮号，从 0 开始；用于观察单炮孔径下定位不稳定性。")
+    parser.add_argument("--shot-weight-mode", choices=["uniform", "near-cavity", "snr"], default="uniform", help="多炮权重。uniform 等权；near-cavity 对靠近候选 x0 的炮加权；snr 用记录能量作简化信噪比权重。")
 
 
 def add_animation_args(parser: argparse.ArgumentParser) -> None:
@@ -124,6 +135,18 @@ def output_options(args: argparse.Namespace) -> dict[str, object]:
 
 def command_outdir(args: argparse.Namespace, name: str) -> Path:
     return Path(args.outdir) if args.outdir else Path("outputs") / name
+
+
+def parse_float_list(text: str) -> tuple[float, ...]:
+    """解析命令行中的逗号分隔浮点数列表。"""
+
+    try:
+        values = tuple(float(part.strip()) for part in text.split(",") if part.strip())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"无法解析浮点数列表: {text}") from exc
+    if not values:
+        raise argparse.ArgumentTypeError("浮点数列表不能为空。")
+    return values
 
 
 def config_from_args(args: argparse.Namespace) -> RoadVoidConfig:
@@ -157,9 +180,15 @@ def config_from_args(args: argparse.Namespace) -> RoadVoidConfig:
             cavity_radius=getattr(args, "cavity_radius", 2.0),
             scattering_strength=getattr(args, "scattering_strength", 1.0),
             attenuation_strength=getattr(args, "attenuation_strength", 0.25),
+            shape=getattr(args, "cavity_shape", "sphere"),
+            anomalies=getattr(args, "anomalies", None),
         ),
         velocity=VelocityConfig(
             rayleigh_velocity=getattr(args, "rayleigh_velocity", 240.0),
+            velocity_model_type=getattr(args, "velocity_mode", "uniform"),
+            layer_depths=parse_float_list(getattr(args, "layer_depths", "0.4,1.5,4.0")),
+            layer_velocities=parse_float_list(getattr(args, "layer_velocities", "180,240,320")),
+            sensitivity_depth_factor=getattr(args, "sensitivity_depth_factor", 0.5),
             source_frequency=getattr(args, "source_frequency", 35.0),
             wavelet_type=getattr(args, "wavelet", "ricker"),
         ),
@@ -194,19 +223,28 @@ def config_from_args(args: argparse.Namespace) -> RoadVoidConfig:
             top_k=getattr(args, "top_k", 8),
             uncertainty_threshold=getattr(args, "uncertainty_threshold", 0.92),
             direct_wave_mute_width=getattr(args, "direct_wave_mute_width", 0.04),
+            scan_mode=getattr(args, "scan_mode", "joint"),
+            shot_index=getattr(args, "shot_index", None),
+            shot_weight_mode=getattr(args, "shot_weight_mode", "uniform"),
         ),
     )
     return cfg
 
 
 def print_key_parameters(cfg: RoadVoidConfig) -> None:
+    cavities = cfg.to_cavities()
+    vr_eff = cfg.effective_rayleigh_velocity()
+    anomaly_text = "none"
+    if cavities:
+        c0 = cavities[0]
+        anomaly_text = f"{c0.shape}@({c0.x0:.1f},{c0.y0:.1f},{c0.h:.1f})"
     print(
         "关键参数："
         f"W={cfg.geometry.road_width:.1f} m, L={cfg.geometry.road_length:.1f} m, "
         f"dx_rec={cfg.geometry.channel_spacing:.1f} m, dx_src={cfg.geometry.source_spacing:.1f} m, "
-        f"VR={cfg.velocity.rayleigh_velocity:.1f} m/s, f={cfg.velocity.source_frequency:.1f} Hz, "
-        f"cavity=({cfg.cavity.cavity_x:.1f}, {cfg.cavity.cavity_y:.1f}, {cfg.cavity.cavity_h:.1f}) m, "
-        f"noise={cfg.noise.noise_level:.3f}"
+        f"velocity-mode={cfg.velocity.velocity_model_type}, VR={cfg.velocity.rayleigh_velocity:.1f} m/s, "
+        f"VR_eff={vr_eff:.1f} m/s, f={cfg.velocity.source_frequency:.1f} Hz, "
+        f"anomalies={len(cavities)}, primary={anomaly_text}, scan-mode={cfg.processing.scan_mode}, noise={cfg.noise.noise_level:.3f}"
     )
 
 
@@ -265,8 +303,8 @@ def run_velocity(args: argparse.Namespace) -> None:
     opts = output_options(args)
     print_key_parameters(cfg)
     geom = cfg.to_geometry()
-    plot_velocity_model(cfg.to_velocity_model(), (float(geom.channel_x[0]), float(geom.channel_x[-1])), cfg.to_cavities(), outdir / "velocity_model.png", **opts)
-    print("说明：layered 速度模型目前主要用于教学展示；核心正演/扫描仍使用等效 VR。")
+    plot_velocity_model(cfg.to_velocity_model(), (float(geom.channel_x[0]), float(geom.channel_x[-1])), cfg.to_cavities(), outdir / "velocity_model.png", effective_velocity=cfg.effective_rayleigh_velocity(), **opts)
+    print(f"说明：velocity-mode={cfg.velocity.velocity_model_type}，当前正演和扫描实际使用 VR_eff={cfg.effective_rayleigh_velocity():.1f} m/s。layered-effective 是轻量近似，不是完整频散反演。")
     save_run_parameters(cfg, outdir, bool(opts["save"]))
 
 
@@ -281,18 +319,33 @@ def run_wavefield(args: argparse.Namespace) -> None:
     geom = cfg.to_geometry()
     shot_index = min(range(geom.n_shots), key=lambda i: abs(geom.shot_x[i] - cavities[0].x0))
     animate = bool(args.animate) and not bool(args.no_animate)
-    animate_kinematic_wavefield(
-        geom,
-        cavities[0],
-        shot_index,
-        cfg.velocity.rayleigh_velocity,
-        outdir / "kinematic_wavefield.gif",
-        t0=cfg.record.t0,
-        n_frames=args.frames,
-        fps=args.fps,
-        save=bool(opts["save"]) and animate,
-        show=bool(opts["show"]),
-    )
+    if animate:
+        animate_kinematic_wavefield(
+            geom,
+            cavities,
+            shot_index,
+            cfg.effective_rayleigh_velocity(),
+            outdir / "kinematic_wavefield.gif",
+            t0=cfg.record.t0,
+            n_frames=args.frames,
+            fps=args.fps,
+            save=bool(opts["save"]),
+            show=bool(opts["show"]),
+        )
+    else:
+        frame_save = bool(opts["save"]) or (not bool(args.no_save) and not bool(opts["show"]))
+        plot_kinematic_wavefield_frames(
+            geom,
+            cavities,
+            shot_index,
+            cfg.effective_rayleigh_velocity(),
+            outdir,
+            t0=cfg.record.t0,
+            save=frame_save,
+            show=bool(opts["show"]),
+            dpi=int(opts["dpi"]),
+        )
+        print("未启用 --animate：已输出/显示 early、hit_cavity、scattered 三个等效运动学关键帧。")
     save_run_parameters(cfg, outdir, bool(opts["save"]))
     print("说明：该波场是等效运动学传播示意，不是严格弹性波场快照。")
 
@@ -340,10 +393,18 @@ def run_scan(args: argparse.Namespace) -> None:
     true_y = cavities[0].y0 if cavities else None
     true_h = cavities[0].h if cavities else None
     plot_score_slices(wf.scan_result, true_x=true_x, true_y=true_y, true_h=true_h, output=outdir / "scan_score_slices.png", **opts)
+    plot_multishot_scan_diagnostics(wf.scan_result, outdir, **opts)
     fit = wf.velocity_fit
     print(f"直达波拟合: VR={fit.velocity:.1f} m/s, t0={fit.t0:.4f} s, RMS={fit.residual_rms:.4f} s")
     print(f"最佳疑似异常体: x={best.x0:.1f} m, y={best.y0:.1f} m, h={best.h:.1f} m, VR={best.velocity:.1f} m/s, score={best.score:.4f}")
     print(f"不确定性范围: {wf.scan_result.uncertainty}")
+    if wf.scan_result.consistency:
+        c = wf.scan_result.consistency
+        mode_label = "单炮扫描结果" if cfg.processing.scan_mode == "single-shot" else "多炮联合扫描结果"
+        print(f"{mode_label}：")
+        print(f"best x/y/h = {best.x0:.1f} / {best.y0:.1f} / {best.h:.1f}")
+        print(f"单炮结果离散程度：x_std={c['x_std']:.2f}, y_std={c['y_std']:.2f}, h_std={c['h_std']:.2f}")
+        print("解释：多炮联合通常让 x 更稳定，但单侧 DAS 下 y-h 耦合仍然存在。")
     save_run_parameters(cfg, outdir, bool(opts["save"]))
 
 
@@ -374,7 +435,7 @@ def run_tutorial(args: argparse.Namespace) -> None:
     plot_shot_gather(wf.residual, geom, shot_index, diffraction_times=best_times, title="03 残差与最佳绕射曲线", output=outdir / "03_scan_residual_best_curve.png", **opts)
     plot_score_slices(wf.scan_result, true_x=cavities[0].x0 if cavities else None, true_y=cavities[0].y0 if cavities else None, true_h=cavities[0].h if cavities else None, output=outdir / "04_scan_score_slices.png", **opts)
     if cavities and bool(args.animate) and not bool(args.no_animate):
-        animate_kinematic_wavefield(geom, cavities[0], shot_index, cfg.velocity.rayleigh_velocity, outdir / "05_kinematic_wavefield.gif", save=bool(opts["save"]), show=False)
+        animate_kinematic_wavefield(geom, cavities, shot_index, cfg.effective_rayleigh_velocity(), outdir / "05_kinematic_wavefield.gif", save=bool(opts["save"]), show=False)
     save_run_parameters(cfg, outdir, bool(opts["save"]))
     print(f"教学流程完成。最佳疑似异常体: x={best.x0:.1f}, y={best.y0:.1f}, h={best.h:.1f}")
 
@@ -414,20 +475,25 @@ def run_workflow(args: argparse.Namespace) -> None:
     print("坐标说明：x 沿道路/光纤方向，y 横穿道路方向，z 为深度；光纤位于 y=0，锤击线位于 y=W。")
 
     print("\nStep 2：展示速度/频率参数。")
+    vr_eff = cfg.effective_rayleigh_velocity()
     wavelength = cfg.velocity.rayleigh_velocity / cfg.velocity.source_frequency
-    print(f"等效瑞雷波速度 VR = {cfg.velocity.rayleigh_velocity:.1f} m/s")
+    print(f"速度模式 velocity-mode = {cfg.velocity.velocity_model_type}")
+    print(f"输入参考瑞雷波速度 VR = {cfg.velocity.rayleigh_velocity:.1f} m/s")
+    print(f"当前实际用于正演/扫描的 VR_eff = {vr_eff:.1f} m/s")
     print(f"锤击主频 f = {cfg.velocity.source_frequency:.1f} Hz")
     print(f"等效波长 lambda = VR / f = {wavelength:.2f} m")
-    print("说明：当前 VR 是某一频带内的等效瑞雷波速度，不是完整随深度变化的速度模型。")
+    print("说明：layered-effective 会用指数敏感深度权重折算层状速度，但仍不是完整频散反演或弹性波场。")
     plot_velocity_model(
         cfg.to_velocity_model(),
         (float(geom.channel_x[0]), float(geom.channel_x[-1])),
         cavities,
         outdir / "02_velocity_model.png",
+        effective_velocity=vr_eff,
         **opts,
     )
 
     print("\nStep 3：正演模拟。")
+    print(f"当前异常体数量: {len(cavities)}；多异常体散射在正演中按等效散射点叠加。")
     workflow = run_location_workflow(cfg)
     dataset = workflow.dataset
     shot_index = geom.n_shots // 2 if not cavities else min(range(geom.n_shots), key=lambda i: abs(geom.shot_x[i] - cavities[0].x0))
@@ -471,6 +537,7 @@ def run_workflow(args: argparse.Namespace) -> None:
         print("当前关闭空洞，跳过 S-D-G 绕射路径图。")
 
     print("\nStep 5：定位扫描。")
+    print(f"扫描模式 scan-mode = {cfg.processing.scan_mode}；炮权重 shot-weight-mode = {cfg.processing.shot_weight_mode}")
     fit = workflow.velocity_fit
     scan = workflow.scan_result
     best = scan.best
@@ -492,6 +559,7 @@ def run_workflow(args: argparse.Namespace) -> None:
         output=outdir / "05_scan_score_slices.png",
         **opts,
     )
+    plot_multishot_scan_diagnostics(scan, outdir, **opts)
     print(f"直达波拟合 VR = {fit.velocity:.1f} m/s")
     print(f"拟合 t0 = {fit.t0:.4f} s, RMS = {fit.residual_rms:.4f} s")
     print(f"最佳疑似异常体 x/y/h/VR = {best.x0:.1f} / {best.y0:.1f} / {best.h:.1f} / {best.velocity:.1f}")
@@ -499,6 +567,9 @@ def run_workflow(args: argparse.Namespace) -> None:
         c = cavities[0]
         print(f"真实空洞位置 x/y/h = {c.x0:.1f} / {c.y0:.1f} / {c.h:.1f}")
     print(f"不确定性范围 = {scan.uncertainty}")
+    if scan.consistency:
+        cns = scan.consistency
+        print(f"单炮结果离散程度：x_std={cns['x_std']:.2f}, y_std={cns['y_std']:.2f}, h_std={cns['h_std']:.2f}")
     print("解释提醒：单侧 DAS + 对侧锤击下，x 通常更稳定，y-h 存在耦合，应输出范围而非唯一确诊点。")
 
     print("\nStep 6：可选运动学波场动画。")
@@ -506,9 +577,9 @@ def run_workflow(args: argparse.Namespace) -> None:
     if animate and cavities:
         animate_kinematic_wavefield(
             geom,
-            cavities[0],
+            cavities,
             shot_index,
-            cfg.velocity.rayleigh_velocity,
+            vr_eff,
             outdir / "06_kinematic_wavefield.gif",
             t0=cfg.record.t0,
             n_frames=args.frames,
@@ -518,11 +589,18 @@ def run_workflow(args: argparse.Namespace) -> None:
         )
         print("已生成 06_kinematic_wavefield.gif。该动画是等效运动学传播示意，不是严格弹性波场快照。")
     else:
-        print("未生成动画。需要动画时运行：python main.py workflow --animate --save，输出为 outputs/workflow/06_kinematic_wavefield.gif")
+        print("未生成动画。如需生成等效波场动图，请运行：")
+        print("python main.py workflow --animate --save")
+        print("或：")
+        print("python main.py wavefield --animate --save")
+        print("输出为 outputs/workflow/06_kinematic_wavefield.gif；该动画是等效运动学传播示意，不是严格弹性波场快照。")
 
     print("\nStep 7：结果总结。")
     save_run_parameters(cfg, outdir, bool(opts["save"]))
     print("本次流程完成。")
+    print(f"速度总结：velocity-mode={cfg.velocity.velocity_model_type}, VR_eff={vr_eff:.1f} m/s。")
+    print(f"扫描总结：scan-mode={cfg.processing.scan_mode}，当前扫描默认定位主异常；多异常联合反演可后续用迭代减去方式扩展。")
+    print(f"异常体总结：本次异常体数量={len(cavities)}，shape 仅表示等效散射几何，不是真实弹性边界散射。")
     print("本方法输出的是疑似异常范围，不是直接确诊空洞。")
     print("真实数据应用前仍需光纤路径标定、锤击触发校正、通道耦合 QC、浅层速度估计和管线/井盖干扰核查。")
 

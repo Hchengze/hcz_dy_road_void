@@ -84,21 +84,24 @@ class RayleighKinematicForwardModel:
         if cfg.coda_amplitude > 0:
             self._add_coda(data, direct_times, direct_amp, rng)
 
-        # 2. 再加入空洞/异常体散射波。每个异常体都用一个有效散射中心表示，
-        #    这不是完整空腔散射场，而是用于验证三维绕射定位的工程近似。
+        # 2. 再加入空洞/异常体散射波。每个异常体可由多个等效散射点组成，
+        #    这能让 sphere/box/cylinder/line 等形状影响运动学响应，但仍不
+        #    等同于真实弹性边界散射。
         diffraction_time_list: list[FloatArray] = []
         for cavity in cavities:
-            td = geom.diffraction_times(cavity.xyz, cfg.rayleigh_velocity, cfg.t0)
-            diffraction_time_list.append(td)
-            sd, dg = self._scatterer_distances(cavity)
-            path = sd + dg
-            lateral_offset = np.abs(geom.shot_x[:, None] - cavity.x0) + np.abs(geom.channel_x[None, :] - cavity.x0)
-            amp = cavity.scattering_strength / np.sqrt(np.maximum(path, 1.0))
-            amp *= np.exp(-cfg.attenuation_q * path)
-            amp *= np.exp(-0.5 * (lateral_offset / max(2.0 * cavity.radius + geom.road_width, 1.0)) ** 2)
-            shifted_t = wavelet_t + 0.25 / cfg.source_frequency
-            scattered = cavity.tail_strength * self._minimum_phase_tail(wavelet_amp)
-            self._add_events(data, td, amp, shifted_t, scattered)
+            diffraction_time_list.append(geom.diffraction_times(cavity.xyz, cfg.rayleigh_velocity, cfg.t0))
+            points, weights = cavity.scatter_points()
+            for point, weight in zip(points, weights):
+                td = geom.diffraction_times(point, cfg.rayleigh_velocity, cfg.t0)
+                sd, dg = self._scatterer_distances(point)
+                path = sd + dg
+                lateral_offset = np.abs(geom.shot_x[:, None] - point[0]) + np.abs(geom.channel_x[None, :] - point[0])
+                amp = weight * cavity.scattering_strength / np.sqrt(np.maximum(path, 1.0))
+                amp *= np.exp(-cfg.attenuation_q * path)
+                amp *= np.exp(-0.5 * (lateral_offset / max(2.0 * cavity.effective_radius + geom.road_width, 1.0)) ** 2)
+                shifted_t = wavelet_t + 0.25 / cfg.source_frequency
+                scattered = cavity.tail_strength * self._minimum_phase_tail(wavelet_amp)
+                self._add_events(data, td, amp, shifted_t, scattered)
             self._apply_shadow(data, cavity, direct_times)
 
         # 3. 最后加入通道增益差异和噪声，使合成数据更接近真实 DAS 采集状态。
@@ -173,8 +176,11 @@ class RayleighKinematicForwardModel:
                 wavelet_amp,
             )
 
-    def _scatterer_distances(self, cavity: Cavity) -> tuple[FloatArray, FloatArray]:
-        point = np.asarray(cavity.xyz, dtype=float)
+    def _scatterer_distances(self, scatterer_xyz: Cavity | FloatArray) -> tuple[FloatArray, FloatArray]:
+        if isinstance(scatterer_xyz, Cavity):
+            point = np.asarray(scatterer_xyz.xyz, dtype=float)
+        else:
+            point = np.asarray(scatterer_xyz, dtype=float)
         sd = np.linalg.norm(self.geometry.shot_xyz - point[None, :], axis=-1)[:, None]
         dg = np.linalg.norm(self.geometry.channel_xyz - point[None, :], axis=-1)[None, :]
         return sd, dg
@@ -185,8 +191,9 @@ class RayleighKinematicForwardModel:
         geom = self.geometry
         # 阴影效应用来表达空洞附近直达波能量可能降低的现象。
         # 它只是一种属性级近似，不代表严格的透射/反射系数计算。
-        x_weight = np.exp(-0.5 * ((geom.channel_x[None, :] - cavity.x0) / max(2.0 * cavity.radius, 1.0)) ** 2)
-        shot_weight = np.exp(-0.5 * ((geom.shot_x[:, None] - cavity.x0) / max(3.0 * cavity.radius, 1.0)) ** 2)
+        radius = cavity.effective_radius
+        x_weight = np.exp(-0.5 * ((geom.channel_x[None, :] - cavity.x0) / max(2.0 * radius, 1.0)) ** 2)
+        shot_weight = np.exp(-0.5 * ((geom.shot_x[:, None] - cavity.x0) / max(3.0 * radius, 1.0)) ** 2)
         shadow = cavity.attenuation_strength * x_weight * shot_weight
         half_width = max(0.025, 1.5 / self.config.source_frequency)
         time = geom.time_axis

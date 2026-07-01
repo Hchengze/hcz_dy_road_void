@@ -102,6 +102,23 @@ outputs/workflow/05_scan_score_slices.png
 outputs/workflow/06_kinematic_wavefield.gif  # 仅 --animate --save 时生成
 ```
 
+默认 `workflow` 不生成 GIF，避免每次运行输出过多。需要查看传播过程时：
+
+```bash
+python main.py workflow --animate --save
+python main.py wavefield --animate --save
+```
+
+如果运行 `python main.py wavefield --save` 而不加 `--animate`，会输出三张关键帧：
+
+```text
+outputs/wavefield/wavefield_frame_early.png
+outputs/wavefield/wavefield_frame_hit_cavity.png
+outputs/wavefield/wavefield_frame_scattered.png
+```
+
+这些图和 GIF 都是“等效运动学传播示意”，用于理解直达波前、异常体散射和 DAS 接收线位置，不是完整弹性波场快照。
+
 ## 常用参数
 
 几何参数：
@@ -114,13 +131,48 @@ python main.py geometry --road-width 24 --road-length 100 --channel-spacing 1 --
 
 ```bash
 python main.py forward --rayleigh-velocity 240 --source-frequency 35 --noise-level 0.03 --save
+python main.py forward --velocity-mode layered-effective --layer-depths 0.4,1.5,4.0 --layer-velocities 180,240,320 --save
 ```
+
+速度模式：
+
+- `--velocity-mode uniform`：保持原始单一等效速度，走时公式使用 `VR`。
+- `--velocity-mode layered-effective`：根据 `lambda=VR/f` 和 `z_sensitive≈alpha*lambda` 对层状速度做指数权重调和平均，得到 `VR_eff`，并让正演和扫描都使用这个有效速度。
+
+上一阶段的层状速度图主要用于展示，因此三层模型对 shot gather 影响不明显；当前 `layered-effective` 会让层速度通过 `VR_eff` 进入直达波和绕射波走时。但它仍是轻量近似，不是完整 Rayleigh 频散反演，也不是三维弹性波全波形正演。
 
 扫描参数：
 
 ```bash
 python main.py scan --scan-x-min 30 --scan-x-max 55 --scan-h-min 0.5 --scan-h-max 5 --scan-h-step 0.3 --save
+python main.py scan --scan-mode joint --save
+python main.py scan --scan-mode single-shot --shot-index 5 --save
+python main.py scan --scan-mode compare --save
 ```
+
+多炮联合扫描：
+
+- `joint`：默认模式，多炮联合评分。
+- `single-shot`：只用指定炮，便于观察单炮孔径下的不稳定性。
+- `compare`：同时保留每炮最佳候选和多炮联合结果。
+
+输出的 `per_shot_best_x.png`、`per_shot_score_contribution.png`、`single_shot_vs_joint.png` 可用于观察多炮联合是否让 `x0` 更稳定。注意：单侧 DAS + 对侧锤击下，`y0-h` 耦合仍然存在，不能因为多炮联合就把横向位置和深度解释成唯一精确值。
+
+多异常体输入示例：
+
+```bash
+python main.py workflow --anomalies "sphere:42,8.5,2.2,2.0,1.0;box:58,6,1.5,4,3,1,0.8" --save
+```
+
+支持的 shape：
+
+- `sphere:x,y,h,radius,strength`
+- `box:x,y,h,size_x,size_y,size_z,strength`
+- `cylinder:x,y,h,radius,height,strength`
+- `ellipsoid:x,y,h,size_x,size_y,size_z,strength`
+- `line:x,y,h,length,azimuth,strength`
+
+当前 shape 只是等效散射几何模型：每个异常体会被离散成少量散射点，叠加多条 `S-D-G` 绕射路径。它用于研究形状、尺度和位置对合成响应的影响，不代表真实弹性边界散射。当前扫描仍默认寻找主异常体；多异常联合反演可后续扩展为“找一个、减去、再找下一个”的迭代流程。
 
 参数含义详见：
 

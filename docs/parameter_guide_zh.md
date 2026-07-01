@@ -33,6 +33,30 @@ t_diff = t0 + [distance(S, D) + distance(D, G)] / VR
 
 `VR` 是某一频带内的等效速度，不是完整随深度变化的速度模型。真实数据中可由直达波三维几何拟合、DAS-MASW 或交通噪声频散估计。`VR` 偏大可能导致深度偏深，`VR` 偏小可能导致深度偏浅。
 
+### `--velocity-mode`
+
+- `uniform`：使用单一 `VR`，保持原始运动学公式。
+- `layered-effective`：根据层状速度、主频和敏感深度近似计算 `VR_eff`，并让正演和扫描都使用该速度。
+
+近似关系为：
+
+```text
+lambda = VR / f
+z_sensitive ≈ alpha * lambda
+w(z) = exp(-z / z_sensitive)
+VR_eff = weighted harmonic mean(layer_velocities, w)
+```
+
+这只是轻量工程近似，用于让层状速度影响当前走时模型；它不是完整 Rayleigh 频散反演，也不是三维弹性波全波形正演。
+
+### `--layer-depths` / `--layer-velocities`
+
+`--layer-depths` 是层底深度，单位 m；`--layer-velocities` 是每层等效瑞雷速度，单位 m/s。两者数量必须一致。低频波长长、敏感深度大，`VR_eff` 更容易受深层速度影响；高频波长短，更受浅层速度影响。
+
+### `--sensitivity-depth-factor`
+
+敏感深度因子 `alpha`。取值越大，等效速度越受深部层影响；取值越小，越强调浅部速度。
+
 ### `--source-frequency`
 
 锤击主频 `f`，单位 Hz。它控制等效波长：
@@ -49,6 +73,28 @@ lambda = VR / f
 
 `--cavity-radius` 控制散射影响范围；`--scattering-strength` 控制绕射/散射事件强度；`--attenuation-strength` 控制异常体附近直达波阴影。
 
+### `--cavity-shape`
+
+单异常体形状。支持 `sphere`、`box`、`cylinder`、`ellipsoid`、`line/zone`。当前 shape 只是等效散射点集合，不代表真实弹性边界散射。
+
+### `--anomalies`
+
+多异常体字符串输入，适合本地快速实验：
+
+```bash
+--anomalies "sphere:42,8.5,2.2,2.0,1.0;box:58,6,1.5,4,3,1,0.8"
+```
+
+格式：
+
+- `sphere:x,y,h,radius,strength`
+- `box:x,y,h,size_x,size_y,size_z,strength`
+- `cylinder:x,y,h,radius,height,strength`
+- `ellipsoid:x,y,h,size_x,size_y,size_z,strength`
+- `line:x,y,h,length,azimuth,strength`
+
+正演会叠加多个异常体的散射响应。当前扫描默认仍寻找主异常体；多异常联合反演可后续采用“定位一个、减去一个、再扫描”的迭代方式。
+
 ## 噪声与耦合参数
 
 - `--noise-level`：随机背景噪声强度。越大，绕射事件越难识别。
@@ -64,6 +110,20 @@ lambda = VR / f
 `--scan-x-min/max/step`、`--scan-y-min/max/step`、`--scan-h-min/max/step`、`--scan-vr-min/max/step` 分别控制沿道路、横向、深度和速度的搜索范围与步长。
 
 步长越小，定位网格越细，但计算量越大；步长过大可能导致真实峰值没有被采样到。`--top-k` 用于观察候选点非唯一性，`--uncertainty-threshold` 用于估计接近最高分的参数范围。
+
+### `--scan-mode`
+
+- `joint`：默认，多炮联合扫描；
+- `single-shot`：只使用 `--shot-index` 指定的一炮；
+- `compare`：保留单炮最佳候选和多炮联合结果，便于教学对比。
+
+多炮联合通常能增强沿道路方向 `x0` 的稳定性，因为异常体会在多个炮点记录中产生一致的 `S-D-G` 走时约束。但由于光纤仍在道路单侧，横向 `y0` 与深度 `h` 的耦合不会自动消失。
+
+### `--shot-weight-mode`
+
+- `uniform`：所有炮等权；
+- `near-cavity`：靠近候选异常体 `x0` 的炮权重更高；
+- `snr`：用记录能量近似信噪比权重。
 
 ## 输出参数
 

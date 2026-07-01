@@ -23,6 +23,17 @@ from .velocity import LayeredRayleighVelocityModel
 FloatArray = NDArray[np.float64]
 
 
+def _shape_marker(cavity: Cavity) -> str:
+    return {
+        "sphere": "o",
+        "box": "s",
+        "cylinder": "^",
+        "ellipsoid": "D",
+        "line": "x",
+        "zone": "x",
+    }.get(cavity.shape.lower(), "o")
+
+
 def _configure_chinese_font() -> None:
     """为 matplotlib 配置常见中文字体，避免中文图题显示为方框。"""
 
@@ -177,6 +188,56 @@ def plot_score_slices(
     _finish_figure(output, save=save, show=show, dpi=dpi)
 
 
+def plot_multishot_scan_diagnostics(
+    result: CavityScanResult,
+    output_dir: str | Path,
+    save: bool = True,
+    show: bool = False,
+    dpi: int = 180,
+) -> None:
+    """绘制单炮与多炮联合扫描的简化诊断图。
+
+    这些图不改变定位算法，只帮助观察：哪些炮对联合评分贡献较大、单炮
+    最佳 x 是否离散，以及联合结果是否比单炮更稳定。
+    """
+
+    if result.per_shot_best is None or result.per_shot_score_contribution is None:
+        return
+    output_dir = Path(output_dir)
+    shot_id = np.arange(len(result.per_shot_best))
+    best_x = np.asarray([c.x0 for c in result.per_shot_best], dtype=float)
+    best_y = np.asarray([c.y0 for c in result.per_shot_best], dtype=float)
+    best_h = np.asarray([c.h for c in result.per_shot_best], dtype=float)
+    contribution = np.asarray(result.per_shot_score_contribution, dtype=float)
+
+    plt.figure(figsize=(8.5, 4.6))
+    plt.plot(shot_id, best_x, "o-", label="单炮最佳 x")
+    plt.axhline(result.best.x0, color="r", lw=2, label="多炮联合最佳 x")
+    plt.xlabel("炮号")
+    plt.ylabel("x0 (m)")
+    plt.title("单炮最佳 x 与多炮联合结果对比")
+    plt.legend()
+    _finish_figure(output_dir / "per_shot_best_x.png", save=save, show=show, dpi=dpi)
+
+    plt.figure(figsize=(8.5, 4.6))
+    plt.bar(shot_id, contribution, color="steelblue", alpha=0.85)
+    plt.xlabel("炮号")
+    plt.ylabel("最佳候选处单炮评分贡献")
+    plt.title("多炮联合评分的单炮贡献")
+    _finish_figure(output_dir / "per_shot_score_contribution.png", save=save, show=show, dpi=dpi)
+
+    plt.figure(figsize=(7.2, 5.4))
+    sc = plt.scatter(best_y, best_h, c=shot_id, cmap="viridis", s=45, label="单炮最佳")
+    plt.scatter(result.best.y0, result.best.h, c="r", marker="+", s=180, linewidths=2.5, label="多炮联合最佳")
+    plt.gca().invert_yaxis()
+    plt.xlabel("y0 (m)")
+    plt.ylabel("h/顶部埋深 (m)")
+    plt.title("single-shot vs joint：y-h 离散性")
+    plt.colorbar(sc, label="炮号")
+    plt.legend()
+    _finish_figure(output_dir / "single_shot_vs_joint.png", save=save, show=show, dpi=dpi)
+
+
 def plot_road_geometry_3d(
     geometry: RoadGeometry,
     cavities: list[Cavity] | None = None,
@@ -200,7 +261,7 @@ def plot_road_geometry_3d(
     ax.plot(geometry.shot_x, np.full_like(geometry.shot_x, float(geometry.shot_y)), 0, "r--", lw=2, label="锤击炮线")
     ax.scatter(geometry.shot_x, np.full_like(geometry.shot_x, float(geometry.shot_y)), 0, s=28, c="r", label="锤击点")
     for cavity in cavities:
-        ax.scatter(cavity.x0, cavity.y0, cavity.h, s=130, c="orange", edgecolors="k", label=f"异常体 {cavity.label}")
+        ax.scatter(cavity.x0, cavity.y0, cavity.h, s=130, c="orange", marker=_shape_marker(cavity), edgecolors="k", label=f"{cavity.shape}:{cavity.label}")
         ax.plot([cavity.x0, cavity.x0], [cavity.y0, cavity.y0], [0, cavity.h], "k:", lw=1)
     ax.text(x_min, geometry.road_width * 0.5, 0.4, f"W={geometry.road_width:.1f} m", color="k")
     ax.set_xlabel("x 沿道路/光纤方向 (m)")
@@ -231,7 +292,7 @@ def plot_geometry_plan_and_sections(
     axes[0].scatter(geometry.channel_x, np.full_like(geometry.channel_x, geometry.fiber_y), s=10, c="b", alpha=0.5)
     axes[0].scatter(geometry.shot_x, np.full_like(geometry.shot_x, float(geometry.shot_y)), s=26, c="r", label="锤击点")
     for cavity in cavities:
-        axes[0].scatter(cavity.x0, cavity.y0, s=110, c="orange", edgecolors="k", label="异常体")
+        axes[0].scatter(cavity.x0, cavity.y0, s=110, c="orange", marker=_shape_marker(cavity), edgecolors="k", label=f"{cavity.shape} 异常体")
     axes[0].set_xlabel("x (m)")
     axes[0].set_ylabel("y (m)")
     axes[0].set_title("x-y 平面布设")
@@ -240,7 +301,7 @@ def plot_geometry_plan_and_sections(
 
     axes[1].axhline(0, color="0.25", lw=1)
     for cavity in cavities:
-        axes[1].scatter(cavity.x0, cavity.h, s=110, c="orange", edgecolors="k")
+        axes[1].scatter(cavity.x0, cavity.h, s=110, c="orange", marker=_shape_marker(cavity), edgecolors="k")
         axes[1].vlines(cavity.x0, 0, cavity.h, color="0.35", linestyles=":")
     axes[1].set_xlim(x_min, x_max)
     axes[1].set_ylim(6, -0.5)
@@ -252,7 +313,7 @@ def plot_geometry_plan_and_sections(
     axes[2].axvline(geometry.fiber_y, color="b", lw=2, label="光纤侧")
     axes[2].axvline(float(geometry.shot_y), color="r", lw=2, linestyle="--", label="锤击侧")
     for cavity in cavities:
-        axes[2].scatter(cavity.y0, cavity.h, s=110, c="orange", edgecolors="k", label="异常体")
+        axes[2].scatter(cavity.y0, cavity.h, s=110, c="orange", marker=_shape_marker(cavity), edgecolors="k", label=f"{cavity.shape} 异常体")
     axes[2].set_xlim(geometry.fiber_y - 2, float(geometry.shot_y) + 2)
     axes[2].set_ylim(6, -0.5)
     axes[2].set_xlabel("y (m)")
@@ -270,6 +331,7 @@ def plot_velocity_model(
     save: bool = True,
     show: bool = False,
     dpi: int = 180,
+    effective_velocity: float | None = None,
 ) -> None:
     """绘制简化分层等效瑞雷波速度模型，并叠加异常体位置。"""
 
@@ -289,10 +351,11 @@ def plot_velocity_model(
     for layer in model.layers:
         plt.axhline(layer.bottom, color="w", lw=0.8, alpha=0.8)
     for cavity in cavities:
-        plt.scatter(cavity.x0, cavity.h, s=130, c="orange", edgecolors="k", label="异常体")
+        plt.scatter(cavity.x0, cavity.h, s=130, c="orange", marker=_shape_marker(cavity), edgecolors="k", label=f"{cavity.shape} 异常体")
     plt.xlabel("x 沿道路方向 (m)")
     plt.ylabel("z/深度 (m)")
-    plt.title("简化分层等效瑞雷波速度模型")
+    suffix = "" if effective_velocity is None else f"；当前 VR_eff={effective_velocity:.1f} m/s"
+    plt.title(f"简化分层等效瑞雷波速度模型{suffix}")
     if cavities:
         plt.legend(loc="lower right")
     _finish_figure(output, save=save, show=show, dpi=dpi)
@@ -339,7 +402,7 @@ def plot_diffraction_path_demo(
 
 def animate_kinematic_wavefield(
     geometry: RoadGeometry,
-    cavity: Cavity,
+    cavity: Cavity | list[Cavity],
     source_index: int,
     velocity: float,
     output: str | Path,
@@ -358,14 +421,14 @@ def animate_kinematic_wavefield(
     output = Path(output)
     if save:
         output.parent.mkdir(parents=True, exist_ok=True)
+    cavities = cavity if isinstance(cavity, list) else [cavity]
+    if not cavities:
+        raise ValueError("至少需要一个异常体才能展示散射波场。")
     sx, sy, _ = geometry.shot_xyz[source_index]
     x = np.linspace(float(geometry.channel_x[0]), float(geometry.channel_x[-1]), 180)
     y = np.linspace(geometry.fiber_y, float(geometry.shot_y), 90)
     xx, yy = np.meshgrid(x, y)
     dist_source = np.sqrt((xx - sx) ** 2 + (yy - sy) ** 2)
-    dist_cavity = np.sqrt((xx - cavity.x0) ** 2 + (yy - cavity.y0) ** 2)
-    source_to_cavity = np.sqrt((sx - cavity.x0) ** 2 + (sy - cavity.y0) ** 2 + cavity.h**2)
-    t_scatter_start = t0 + source_to_cavity / velocity
     times = np.linspace(t0, geometry.t_max * 0.65, n_frames)
     sigma = max(0.8, velocity * geometry.dt * 3.0)
 
@@ -382,7 +445,8 @@ def animate_kinematic_wavefield(
     ax.plot(geometry.channel_x, np.full_like(geometry.channel_x, geometry.fiber_y), "c-", lw=2, label="DAS 光纤")
     ax.scatter(geometry.shot_x, np.full_like(geometry.shot_x, float(geometry.shot_y)), s=12, c="w", alpha=0.5, label="锤击点")
     ax.scatter([sx], [sy], s=90, c="lime", edgecolors="k", label="当前震源")
-    ax.scatter([cavity.x0], [cavity.y0], s=110, c="orange", edgecolors="k", label="异常体")
+    for cav in cavities:
+        ax.scatter([cav.x0], [cav.y0], s=110, c="orange", marker=_shape_marker(cav), edgecolors="k", label=f"{cav.shape} 异常体")
     ax.set_xlabel("x 沿道路方向 (m)")
     ax.set_ylabel("y 横穿道路方向 (m)")
     ax.set_title("等效运动学波场示意")
@@ -394,9 +458,13 @@ def animate_kinematic_wavefield(
         direct_radius = max(0.0, velocity * (t - t0))
         direct = np.exp(-0.5 * ((dist_source - direct_radius) / sigma) ** 2)
         scatter = np.zeros_like(direct)
-        if t > t_scatter_start:
-            scatter_radius = velocity * (t - t_scatter_start)
-            scatter = cavity.scattering_strength * np.exp(-0.5 * ((dist_cavity - scatter_radius) / sigma) ** 2)
+        for cav in cavities:
+            dist_cavity = np.sqrt((xx - cav.x0) ** 2 + (yy - cav.y0) ** 2)
+            source_to_cavity = np.sqrt((sx - cav.x0) ** 2 + (sy - cav.y0) ** 2 + cav.h**2)
+            t_scatter_start = t0 + source_to_cavity / velocity
+            if t > t_scatter_start:
+                scatter_radius = velocity * (t - t_scatter_start)
+                scatter += cav.scattering_strength * np.exp(-0.5 * ((dist_cavity - scatter_radius) / sigma) ** 2)
         field = direct + scatter
         field /= max(float(np.max(field)), 1e-9)
         image.set_data(field)
@@ -412,3 +480,88 @@ def animate_kinematic_wavefield(
         plt.show()
     else:
         plt.close(fig)
+
+
+def plot_kinematic_wavefield_frames(
+    geometry: RoadGeometry,
+    cavities: list[Cavity],
+    source_index: int,
+    velocity: float,
+    outdir: str | Path,
+    t0: float = 0.02,
+    save: bool = True,
+    show: bool = False,
+    dpi: int = 180,
+) -> None:
+    """输出等效运动学波场的三个关键静态帧。
+
+    三帧分别对应早期直达波、波前到达主异常体附近、散射波已展开。它们
+    是与当前运动学正演一致的传播示意，不是严格弹性波场快照。
+    """
+
+    if not cavities:
+        return
+    outdir = Path(outdir)
+    sx, sy, _ = geometry.shot_xyz[source_index]
+    primary = cavities[0]
+    hit_time = t0 + np.sqrt((sx - primary.x0) ** 2 + (sy - primary.y0) ** 2 + primary.h**2) / velocity
+    frame_times = {
+        "wavefield_frame_early.png": max(t0 + 0.08, 0.45 * hit_time),
+        "wavefield_frame_hit_cavity.png": hit_time,
+        "wavefield_frame_scattered.png": min(geometry.t_max * 0.75, hit_time + 0.12),
+    }
+    for filename, frame_time in frame_times.items():
+        _plot_single_wavefield_frame(
+            geometry,
+            cavities,
+            source_index,
+            velocity,
+            frame_time,
+            outdir / filename,
+            t0=t0,
+            save=save,
+            show=show,
+            dpi=dpi,
+        )
+
+
+def _plot_single_wavefield_frame(
+    geometry: RoadGeometry,
+    cavities: list[Cavity],
+    source_index: int,
+    velocity: float,
+    frame_time: float,
+    output: Path,
+    t0: float,
+    save: bool,
+    show: bool,
+    dpi: int,
+) -> None:
+    sx, sy, _ = geometry.shot_xyz[source_index]
+    x = np.linspace(float(geometry.channel_x[0]), float(geometry.channel_x[-1]), 180)
+    y = np.linspace(geometry.fiber_y, float(geometry.shot_y), 90)
+    xx, yy = np.meshgrid(x, y)
+    sigma = max(0.8, velocity * geometry.dt * 3.0)
+    dist_source = np.sqrt((xx - sx) ** 2 + (yy - sy) ** 2)
+    direct_radius = max(0.0, velocity * (frame_time - t0))
+    field = np.exp(-0.5 * ((dist_source - direct_radius) / sigma) ** 2)
+    for cav in cavities:
+        dist_cavity = np.sqrt((xx - cav.x0) ** 2 + (yy - cav.y0) ** 2)
+        source_to_cavity = np.sqrt((sx - cav.x0) ** 2 + (sy - cav.y0) ** 2 + cav.h**2)
+        t_scatter_start = t0 + source_to_cavity / velocity
+        if frame_time > t_scatter_start:
+            scatter_radius = velocity * (frame_time - t_scatter_start)
+            field += cav.scattering_strength * np.exp(-0.5 * ((dist_cavity - scatter_radius) / sigma) ** 2)
+    field /= max(float(np.max(field)), 1e-9)
+    plt.figure(figsize=(8.5, 5.2))
+    plt.imshow(field, origin="lower", extent=[x[0], x[-1], y[0], y[-1]], aspect="auto", cmap="inferno", vmin=0, vmax=1.1)
+    plt.colorbar(label="归一化示意振幅")
+    plt.plot(geometry.channel_x, np.full_like(geometry.channel_x, geometry.fiber_y), "c-", lw=2, label="DAS 光纤")
+    plt.scatter([sx], [sy], s=90, c="lime", edgecolors="k", label="当前震源")
+    for cav in cavities:
+        plt.scatter([cav.x0], [cav.y0], s=110, c="orange", marker=_shape_marker(cav), edgecolors="k", label=f"{cav.shape} 异常体")
+    plt.xlabel("x 沿道路方向 (m)")
+    plt.ylabel("y 横穿道路方向 (m)")
+    plt.title(f"等效运动学传播示意，不是严格弹性波场快照；t={frame_time:.3f} s")
+    plt.legend(loc="upper right")
+    _finish_figure(output, save=save, show=show, dpi=dpi)

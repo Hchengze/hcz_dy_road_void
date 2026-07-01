@@ -38,3 +38,25 @@ def test_cavity_scan_recovers_approximate_x_location():
     assert abs(result.best.x0 - cavity.x0) <= 4.0
     assert result.best.score > 0
     assert result.uncertainty["x0"][0] <= result.best.x0 <= result.uncertainty["x0"][1]
+
+
+def test_scan_modes_return_joint_and_single_shot_structures():
+    geom = RoadGeometry.from_ranges(road_width=15, x_min=0, x_max=30, channel_spacing=3, shot_spacing=10, dt=0.002, t_max=0.65)
+    cavity = Cavity(x0=16.0, y0=8.0, h=2.0, scattering_strength=1.2)
+    cfg = ForwardModelConfig(rayleigh_velocity=240.0, t0=0.02, noise_std=0.002, traffic_noise_std=0.0, random_seed=6)
+    ds = RayleighKinematicForwardModel(geom, cfg).simulate([cavity])
+    residual = trace_normalize(mute_direct_wave(ds.data, geom, 240.0, 0.02, half_width=0.035))
+    grid = CavityScanGrid(
+        x=np.arange(10.0, 22.1, 4.0),
+        y=np.arange(5.0, 11.1, 3.0),
+        h=np.arange(1.0, 3.1, 1.0),
+        velocity=np.array([230.0, 240.0]),
+    )
+    joint = scan_cavity_diffraction(residual, geom, grid, t0=0.02, scan_mode="joint", top_k=3)
+    single = scan_cavity_diffraction(residual, geom, grid, t0=0.02, scan_mode="single-shot", shot_index=1, top_k=3)
+    compare = scan_cavity_diffraction(residual, geom, grid, t0=0.02, scan_mode="compare", top_k=3)
+    assert joint.scan_mode == "joint"
+    assert single.scan_mode == "single-shot"
+    assert compare.per_shot_best is not None
+    assert len(compare.per_shot_best) == geom.n_shots
+    assert compare.consistency is not None

@@ -44,10 +44,11 @@ def run_location_workflow(config: RoadVoidConfig) -> WorkflowResult:
 
     dataset = simulate_from_config(config)
     geom = dataset.geometry
+    effective_velocity = config.effective_rayleigh_velocity()
     picks = pick_direct_arrivals(
         dataset.data,
         geom,
-        velocity_hint=config.velocity.rayleigh_velocity,
+        velocity_hint=effective_velocity,
         t0_hint=config.record.t0,
         search_half_width=max(0.03, config.processing.direct_wave_mute_width),
     )
@@ -81,6 +82,9 @@ def run_location_workflow(config: RoadVoidConfig) -> WorkflowResult:
         half_window=0.012,
         top_k=config.processing.top_k,
         confidence_fraction=config.processing.uncertainty_threshold,
+        scan_mode=config.processing.scan_mode,
+        shot_index=config.processing.shot_index,
+        shot_weight_mode=config.processing.shot_weight_mode,
     )
     return WorkflowResult(
         dataset=dataset,

@@ -72,6 +72,31 @@ def test_main_scan_parameter_override_runs():
     assert "2.5" in completed.stdout
 
 
+def test_main_scan_modes_run_with_coarse_grid():
+    common = [
+        "--scan-x-step",
+        "6",
+        "--scan-y-step",
+        "4",
+        "--scan-h-step",
+        "1.6",
+        "--scan-vr-step",
+        "40",
+        "--no-save",
+    ]
+    for mode in ["joint", "single-shot", "compare"]:
+        extra = ["--shot-index", "5"] if mode == "single-shot" else []
+        completed = _run_cli("scan", "--scan-mode", mode, *extra, *common)
+        assert "最佳疑似异常体" in completed.stdout
+
+
+def test_wavefield_animate_save_generates_gif():
+    outdir = Path(".tmp_test_outputs/wavefield_gif")
+    completed = _run_cli("wavefield", "--animate", "--save", "--frames", "3", "--outdir", str(outdir))
+    assert completed.returncode == 0
+    assert (outdir / "kinematic_wavefield.gif").exists()
+
+
 def test_main_tutorial_no_save_is_compact():
     completed = _run_cli("tutorial", "--no-save")
     assert "教学流程完成" in completed.stdout
@@ -144,3 +169,5 @@ def test_readme_no_longer_recommends_config_as_main_entry():
     assert "python main.py workflow" in text
     assert "历史兼容" in text
     assert "python main.py scan --config" not in text
+    assert "layered-effective" in text
+    assert "不是完整弹性波场" in text
