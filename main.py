@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -28,6 +29,17 @@ from road_void.visualization import (
     plot_velocity_model,
 )
 from road_void.workflow import run_location_workflow, simulate_from_config
+
+
+WORKFLOW_STEPS = [
+    ("geometry", "建立道路三维几何：道路、光纤、炮线、空洞"),
+    ("velocity", "展示等效瑞雷波速度/速度模型，并说明 lambda = VR / f"),
+    ("forward", "锤击激发三维等效瑞雷波正演，生成单侧 DAS shot gather"),
+    ("path", "展示 S-G 直达路径与 S-D-G 绕射路径及走时公式"),
+    ("scan", "直达波拟合、残差构建、绕射扫描和疑似空洞定位"),
+    ("wavefield", "可选生成等效运动学波场动画，不作为高保真弹性波场"),
+    ("summary", "输出结果解释、受限孔径提醒和参数记录"),
+]
 
 
 def add_output_args(parser: argparse.ArgumentParser) -> None:
@@ -367,28 +379,165 @@ def run_tutorial(args: argparse.Namespace) -> None:
     print(f"教学流程完成。最佳疑似异常体: x={best.x0:.1f}, y={best.y0:.1f}, h={best.h:.1f}")
 
 
-def run_all(args: argparse.Namespace) -> None:
-    """快速总览：只生成代表性几何、正演和扫描结果，避免输出爆炸。"""
+def run_workflow(args: argparse.Namespace) -> None:
+    """按算法逻辑顺序执行完整流程，且只正演一次、扫描一次。
+
+    workflow 与 tutorial 的区别：workflow 是默认主入口，控制台会按步骤解释
+    算法路线；tutorial 更像少量图件教学输出。这里统一上下文，避免重复调用
+    run_forward/run_scan 导致重复正演、重复扫描和重复图件。
+    """
 
     cfg = config_from_args(args)
-    outdir = command_outdir(args, "overview")
+    outdir = command_outdir(args, "workflow")
     opts = output_options(args)
-    print_key_parameters(cfg)
     geom = cfg.to_geometry()
     cavities = cfg.to_cavities()
-    plot_geometry_plan_and_sections(geom, cavities, outdir / "01_geometry.png", **opts)
-    wf = run_location_workflow(cfg)
+
+    print("完整 workflow 开始。步骤顺序：")
+    for idx, (_, desc) in enumerate(WORKFLOW_STEPS, start=1):
+        print(f"  Step {idx}: {desc}")
+    print_key_parameters(cfg)
+
+    print("\nStep 1：构建三维道路场景。")
+    plot_geometry_plan_and_sections(
+        geom,
+        cavities,
+        outdir / "01_geometry_plan_sections.png",
+        **opts,
+    )
+    plot_road_geometry_3d(
+        geom,
+        cavities,
+        outdir / "01_geometry_3d.png",
+        **opts,
+    )
+    print("坐标说明：x 沿道路/光纤方向，y 横穿道路方向，z 为深度；光纤位于 y=0，锤击线位于 y=W。")
+
+    print("\nStep 2：展示速度/频率参数。")
+    wavelength = cfg.velocity.rayleigh_velocity / cfg.velocity.source_frequency
+    print(f"等效瑞雷波速度 VR = {cfg.velocity.rayleigh_velocity:.1f} m/s")
+    print(f"锤击主频 f = {cfg.velocity.source_frequency:.1f} Hz")
+    print(f"等效波长 lambda = VR / f = {wavelength:.2f} m")
+    print("说明：当前 VR 是某一频带内的等效瑞雷波速度，不是完整随深度变化的速度模型。")
+    plot_velocity_model(
+        cfg.to_velocity_model(),
+        (float(geom.channel_x[0]), float(geom.channel_x[-1])),
+        cavities,
+        outdir / "02_velocity_model.png",
+        **opts,
+    )
+
+    print("\nStep 3：正演模拟。")
+    workflow = run_location_workflow(cfg)
+    dataset = workflow.dataset
     shot_index = geom.n_shots // 2 if not cavities else min(range(geom.n_shots), key=lambda i: abs(geom.shot_x[i] - cavities[0].x0))
-    plot_shot_gather(wf.dataset.data, geom, shot_index, direct_times=wf.dataset.direct_times, diffraction_times=wf.dataset.diffraction_times[0] if wf.dataset.diffraction_times else None, title="02 正演记录", output=outdir / "02_forward_gather.png", **opts)
-    plot_score_slices(wf.scan_result, true_x=cavities[0].x0 if cavities else None, true_y=cavities[0].y0 if cavities else None, true_h=cavities[0].h if cavities else None, output=outdir / "03_scan_scores.png", **opts)
+    print(f"合成数据形状: {dataset.data.shape} = shots x times x channels")
+    plot_shot_gather(
+        dataset.data,
+        geom,
+        shot_index,
+        direct_times=dataset.direct_times,
+        diffraction_times=dataset.diffraction_times[0] if dataset.diffraction_times else None,
+        title="03 正演 shot gather：直达波与绕射/散射事件",
+        output=outdir / "03_forward_gather.png",
+        **opts,
+    )
+
+    print("\nStep 4：传播路径说明。")
+    print("t_direct = t0 + |S-G| / VR")
+    print("t_diff   = t0 + (|S-D| + |D-G|) / VR")
+    if cavities:
+        cavity = cavities[0]
+        channel_index = min(range(geom.n_channels), key=lambda i: abs(geom.channel_x[i] - cavity.x0))
+        plot_diffraction_path_demo(
+            geom,
+            cavity,
+            shot_index,
+            channel_index,
+            outdir / "04_diffraction_path.png",
+            **opts,
+        )
+        plot_shot_gather(
+            dataset.data,
+            geom,
+            shot_index,
+            direct_times=dataset.direct_times,
+            diffraction_times=dataset.diffraction_times[0] if dataset.diffraction_times else None,
+            title="04 直达波与绕射波理论曲线叠加",
+            output=outdir / "04_gather_with_curves.png",
+            **opts,
+        )
+    else:
+        print("当前关闭空洞，跳过 S-D-G 绕射路径图。")
+
+    print("\nStep 5：定位扫描。")
+    fit = workflow.velocity_fit
+    scan = workflow.scan_result
+    best = scan.best
+    best_times = geom.diffraction_times((best.x0, best.y0, best.h), best.velocity, fit.t0)
+    plot_shot_gather(
+        workflow.residual,
+        geom,
+        shot_index,
+        diffraction_times=best_times,
+        title="05 残差记录与最佳三维绕射曲线",
+        output=outdir / "05_residual_best_curve.png",
+        **opts,
+    )
+    plot_score_slices(
+        scan,
+        true_x=cavities[0].x0 if cavities else None,
+        true_y=cavities[0].y0 if cavities else None,
+        true_h=cavities[0].h if cavities else None,
+        output=outdir / "05_scan_score_slices.png",
+        **opts,
+    )
+    print(f"直达波拟合 VR = {fit.velocity:.1f} m/s")
+    print(f"拟合 t0 = {fit.t0:.4f} s, RMS = {fit.residual_rms:.4f} s")
+    print(f"最佳疑似异常体 x/y/h/VR = {best.x0:.1f} / {best.y0:.1f} / {best.h:.1f} / {best.velocity:.1f}")
+    if cavities:
+        c = cavities[0]
+        print(f"真实空洞位置 x/y/h = {c.x0:.1f} / {c.y0:.1f} / {c.h:.1f}")
+    print(f"不确定性范围 = {scan.uncertainty}")
+    print("解释提醒：单侧 DAS + 对侧锤击下，x 通常更稳定，y-h 存在耦合，应输出范围而非唯一确诊点。")
+
+    print("\nStep 6：可选运动学波场动画。")
+    animate = bool(args.animate) and not bool(args.no_animate)
+    if animate and cavities:
+        animate_kinematic_wavefield(
+            geom,
+            cavities[0],
+            shot_index,
+            cfg.velocity.rayleigh_velocity,
+            outdir / "06_kinematic_wavefield.gif",
+            t0=cfg.record.t0,
+            n_frames=args.frames,
+            fps=args.fps,
+            save=bool(opts["save"]),
+            show=bool(opts["show"]),
+        )
+        print("已生成 06_kinematic_wavefield.gif。该动画是等效运动学传播示意，不是严格弹性波场快照。")
+    else:
+        print("未生成动画。需要动画时运行：python main.py workflow --animate --save，输出为 outputs/workflow/06_kinematic_wavefield.gif")
+
+    print("\nStep 7：结果总结。")
     save_run_parameters(cfg, outdir, bool(opts["save"]))
-    print("all 总览完成：只输出一套代表性几何、正演和扫描图。")
+    print("本次流程完成。")
+    print("本方法输出的是疑似异常范围，不是直接确诊空洞。")
+    print("真实数据应用前仍需光纤路径标定、锤击触发校正、通道耦合 QC、浅层速度估计和管线/井盖干扰核查。")
+
+
+def run_all(args: argparse.Namespace) -> None:
+    """all 作为 workflow 的别名，避免维护两套完整流程。"""
+
+    run_workflow(args)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="城市道路空洞 DAS 三维正演与定位研究原型")
     sub = parser.add_subparsers(dest="command", required=True)
     handlers = {
+        "workflow": run_workflow,
         "geometry": run_geometry,
         "forward": run_forward,
         "velocity": run_velocity,
@@ -403,9 +552,9 @@ def build_parser() -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=f"运行 {name} 功能")
         add_geometry_args(p)
         add_wave_args(p)
-        if name in {"scan", "sensitivity", "tutorial", "all"}:
+        if name in {"scan", "sensitivity", "tutorial", "workflow", "all"}:
             add_scan_args(p)
-        if name in {"wavefield", "tutorial"}:
+        if name in {"wavefield", "tutorial", "workflow", "all"}:
             add_animation_args(p)
         add_output_args(p)
         p.set_defaults(func=handler)
@@ -413,7 +562,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    args = build_parser().parse_args()
+    argv = sys.argv[1:]
+    if not argv or argv[0].startswith("--"):
+        argv = ["workflow", *argv]
+    args = build_parser().parse_args(argv)
     args.func(args)
 
 

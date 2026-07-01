@@ -29,6 +29,33 @@ def test_main_geometry_no_save_runs():
     assert "关键参数" in completed.stdout
 
 
+def test_main_without_subcommand_runs_default_workflow():
+    completed = _run_cli("--no-save")
+    assert "workflow" in completed.stdout
+    assert "Step 1" in completed.stdout
+    assert "Step 7" in completed.stdout
+
+
+def test_main_workflow_no_save_runs():
+    completed = _run_cli("workflow", "--no-save")
+    assert "workflow" in completed.stdout
+    assert "Step 5" in completed.stdout
+    assert "合成数据形状" in completed.stdout
+
+
+def test_main_workflow_parameter_override_runs():
+    completed = _run_cli("workflow", "--road-width", "30", "--cavity-depth", "2.5", "--noise-level", "0.1", "--no-save")
+    assert "W=30.0" in completed.stdout
+    assert "2.5" in completed.stdout
+    assert "noise=0.100" in completed.stdout
+
+
+def test_main_all_alias_runs_workflow():
+    completed = _run_cli("all", "--no-save")
+    assert "workflow" in completed.stdout
+    assert "Step 7" in completed.stdout
+
+
 def test_main_forward_no_save_runs():
     completed = _run_cli("forward", "--no-save")
     assert "合成数据形状" in completed.stdout
@@ -49,6 +76,24 @@ def test_main_tutorial_no_save_is_compact():
     completed = _run_cli("tutorial", "--no-save")
     assert "教学流程完成" in completed.stdout
     assert "敏感性分析" not in completed.stdout
+
+
+def test_workflow_no_save_does_not_run_sensitivity_or_animation():
+    completed = _run_cli("workflow", "--no-save")
+    assert "parameter_sensitivity_results.csv" not in completed.stdout
+    assert "06_kinematic_wavefield.gif" in completed.stdout
+    assert "未生成动画" in completed.stdout
+
+
+def test_workflow_and_scan_share_parameter_mapping():
+    parser = build_parser()
+    workflow_args = parser.parse_args(["workflow", "--road-width", "30", "--cavity-depth", "2.5", "--noise-level", "0.1", "--no-save"])
+    scan_args = parser.parse_args(["scan", "--road-width", "30", "--cavity-depth", "2.5", "--noise-level", "0.1", "--no-save"])
+    workflow_cfg = config_from_args(workflow_args)
+    scan_cfg = config_from_args(scan_args)
+    assert workflow_cfg.geometry.road_width == scan_cfg.geometry.road_width == 30.0
+    assert workflow_cfg.cavity.cavity_h == scan_cfg.cavity.cavity_h == 2.5
+    assert workflow_cfg.noise.noise_level == scan_cfg.noise.noise_level == 0.1
 
 
 def test_road_width_changes_geometry_and_times():
@@ -94,6 +139,8 @@ def test_minimal_examples_run():
 
 def test_readme_no_longer_recommends_config_as_main_entry():
     text = Path("README.md").read_text(encoding="utf-8")
-    assert "日常使用优先运行 `main.py`" in text
+    assert "日常使用优先直接运行完整 workflow" in text
+    assert "python main.py\n" in text
+    assert "python main.py workflow" in text
     assert "历史兼容" in text
     assert "python main.py scan --config" not in text

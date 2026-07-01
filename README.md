@@ -6,7 +6,30 @@
 
 ## 推荐入口
 
-日常使用优先运行 `main.py`：
+日常使用优先直接运行完整 workflow：
+
+```bash
+python main.py
+```
+
+这等价于：
+
+```bash
+python main.py workflow
+```
+
+`workflow` 会按“建模几何 -> 速度/频率说明 -> 正演 -> 路径公式 -> 绕射扫描 -> 结果解释”的算法顺序执行一遍，并且在同一上下文中只正演一次、扫描一次，避免重复生成大量图件。
+
+常用 workflow 运行方式：
+
+```bash
+python main.py workflow --show --no-save
+python main.py workflow --save --no-show
+python main.py workflow --road-width 30 --cavity-depth 2.5 --noise-level 0.1 --save
+python main.py workflow --animate --save
+```
+
+单独调试某一环节时，再运行对应子命令：
 
 ```bash
 python main.py geometry --show --no-save
@@ -25,7 +48,8 @@ python main.py tutorial --save
 - `scan`：做绕射扫描定位，输出最佳候选和评分图。
 - `sensitivity`：做参数敏感性分析，输出少量趋势图和 CSV。
 - `tutorial`：生成一套不重复的教学流程图。
-- `all`：快速总览，只输出代表性的几何、正演和扫描图，避免输出爆炸。
+- `workflow`：默认完整流程入口，控制台按算法步骤解释，输出一套代表性图件。
+- `all`：当前作为 `workflow` 的别名，保留给习惯使用 `all` 的场景；日常推荐使用 `workflow` 或直接 `python main.py`。
 
 ## 图件保存与交互显示
 
@@ -61,8 +85,22 @@ python main.py tutorial --save --outdir outputs/tutorial
 - `outputs/path/`
 - `outputs/scan/`
 - `outputs/tutorial/`
+- `outputs/workflow/`
 - `outputs/sensitivity/`
-- `outputs/overview/`
+
+`workflow` 默认保存文件名采用步骤编号，便于按算法顺序阅读：
+
+```text
+outputs/workflow/01_geometry_plan_sections.png
+outputs/workflow/01_geometry_3d.png
+outputs/workflow/02_velocity_model.png
+outputs/workflow/03_forward_gather.png
+outputs/workflow/04_diffraction_path.png
+outputs/workflow/04_gather_with_curves.png
+outputs/workflow/05_residual_best_curve.png
+outputs/workflow/05_scan_score_slices.png
+outputs/workflow/06_kinematic_wavefield.gif  # 仅 --animate --save 时生成
+```
 
 ## 常用参数
 

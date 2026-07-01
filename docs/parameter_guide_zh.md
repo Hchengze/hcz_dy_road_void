@@ -1,6 +1,6 @@
 # main.py 参数中文说明
 
-本项目当前推荐直接通过 `main.py <subcommand> --参数` 修改实验参数。YAML 配置仅作为历史兼容，不再是主入口。
+本项目当前推荐直接通过 `main.py <subcommand> --参数` 修改实验参数。直接运行 `python main.py` 会进入完整 `workflow`，按几何、速度、正演、路径、扫描、总结的顺序跑一遍；单独调试时再使用 `python main.py geometry`、`python main.py forward`、`python main.py scan` 等子命令。YAML 配置仅作为历史兼容，不再是主入口。
 
 ## 道路与几何参数
 
