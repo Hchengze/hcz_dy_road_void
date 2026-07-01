@@ -45,16 +45,27 @@ def _configure_chinese_font() -> None:
 _configure_chinese_font()
 
 
-def _finish_figure(output: str | Path | None) -> None:
-    """保存或显示当前图件。"""
+def _finish_figure(
+    output: str | Path | None,
+    *,
+    save: bool = True,
+    show: bool = False,
+    dpi: int = 180,
+) -> None:
+    """保存和/或交互显示当前图件。
+
+    ``save`` 和 ``show`` 可以同时为 True：先保存文件，再弹出 matplotlib
+    交互窗口。若二者都为 False，则只关闭图件，适合自动测试或快速跑流程。
+    """
 
     plt.tight_layout()
-    if output:
+    if save and output:
         Path(output).parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output, dpi=180)
-        plt.close()
-    else:
+        plt.savefig(output, dpi=dpi)
+    if show:
         plt.show()
+    else:
+        plt.close()
 
 
 def plot_shot_gather(
@@ -65,6 +76,9 @@ def plot_shot_gather(
     diffraction_times: FloatArray | None = None,
     title: str | None = None,
     output: str | Path | None = None,
+    save: bool = True,
+    show: bool = False,
+    dpi: int = 180,
 ) -> None:
     """绘制单炮记录，并可叠加三维直达波和绕射波理论走时曲线。"""
 
@@ -88,7 +102,7 @@ def plot_shot_gather(
     plt.title(title or f"第 {shot_index} 炮记录")
     if direct_times is not None or diffraction_times is not None:
         plt.legend(loc="upper right")
-    _finish_figure(output)
+    _finish_figure(output, save=save, show=show, dpi=dpi)
 
 
 def plot_score_slices(
@@ -97,6 +111,9 @@ def plot_score_slices(
     true_y: float | None = None,
     true_h: float | None = None,
     output: str | Path | None = None,
+    save: bool = True,
+    show: bool = False,
+    dpi: int = 180,
 ) -> None:
     """绘制 x-y、x-h、y-h 三个最大评分切片，并标出 top-k 候选点。"""
 
@@ -157,13 +174,16 @@ def plot_score_slices(
         axes[2].plot(true_y, true_h, "wo", mec="k", label="真值")
     for ax in axes:
         ax.legend(loc="upper right")
-    _finish_figure(output)
+    _finish_figure(output, save=save, show=show, dpi=dpi)
 
 
 def plot_road_geometry_3d(
     geometry: RoadGeometry,
     cavities: list[Cavity] | None = None,
     output: str | Path | None = None,
+    save: bool = True,
+    show: bool = False,
+    dpi: int = 180,
 ) -> None:
     """绘制道路、DAS 光纤、锤击炮线和空洞位置的三维示意图。"""
 
@@ -190,13 +210,16 @@ def plot_road_geometry_3d(
     ax.set_zlim(max(6.0, max([c.h for c in cavities], default=2.0) + 1.0), -0.5)
     ax.view_init(elev=23, azim=-58)
     ax.legend(loc="upper left")
-    _finish_figure(output)
+    _finish_figure(output, save=save, show=show, dpi=dpi)
 
 
 def plot_geometry_plan_and_sections(
     geometry: RoadGeometry,
     cavities: list[Cavity] | None = None,
     output: str | Path | None = None,
+    save: bool = True,
+    show: bool = False,
+    dpi: int = 180,
 ) -> None:
     """绘制 x-y 平面布设图、x-z 剖面图和 y-z 剖面图。"""
 
@@ -236,7 +259,7 @@ def plot_geometry_plan_and_sections(
     axes[2].set_ylabel("z/深度 (m)")
     axes[2].set_title("y-z 横向剖面")
     axes[2].legend(loc="upper right")
-    _finish_figure(output)
+    _finish_figure(output, save=save, show=show, dpi=dpi)
 
 
 def plot_velocity_model(
@@ -244,6 +267,9 @@ def plot_velocity_model(
     x_range: tuple[float, float],
     cavities: list[Cavity] | None = None,
     output: str | Path | None = None,
+    save: bool = True,
+    show: bool = False,
+    dpi: int = 180,
 ) -> None:
     """绘制简化分层等效瑞雷波速度模型，并叠加异常体位置。"""
 
@@ -269,7 +295,7 @@ def plot_velocity_model(
     plt.title("简化分层等效瑞雷波速度模型")
     if cavities:
         plt.legend(loc="lower right")
-    _finish_figure(output)
+    _finish_figure(output, save=save, show=show, dpi=dpi)
 
 
 def plot_diffraction_path_demo(
@@ -278,6 +304,9 @@ def plot_diffraction_path_demo(
     shot_index: int,
     channel_index: int,
     output: str | Path | None = None,
+    save: bool = True,
+    show: bool = False,
+    dpi: int = 180,
 ) -> None:
     """绘制直达路径与源-空洞-接收绕射路径对比图。"""
 
@@ -305,7 +334,7 @@ def plot_diffraction_path_demo(
     ax.set_zlim(max(5.0, cavity.h + 1.0), -0.5)
     ax.view_init(elev=23, azim=-58)
     ax.legend(loc="upper right")
-    _finish_figure(output)
+    _finish_figure(output, save=save, show=show, dpi=dpi)
 
 
 def animate_kinematic_wavefield(
@@ -317,6 +346,8 @@ def animate_kinematic_wavefield(
     t0: float = 0.02,
     n_frames: int = 48,
     fps: int = 10,
+    save: bool = True,
+    show: bool = False,
 ) -> None:
     """生成等效运动学波场 GIF，展示直达波前与空洞散射波前。
 
@@ -325,7 +356,8 @@ def animate_kinematic_wavefield(
     """
 
     output = Path(output)
-    output.parent.mkdir(parents=True, exist_ok=True)
+    if save:
+        output.parent.mkdir(parents=True, exist_ok=True)
     sx, sy, _ = geometry.shot_xyz[source_index]
     x = np.linspace(float(geometry.channel_x[0]), float(geometry.channel_x[-1]), 180)
     y = np.linspace(geometry.fiber_y, float(geometry.shot_y), 90)
@@ -372,6 +404,11 @@ def animate_kinematic_wavefield(
         return [image, time_text]
 
     anim = animation.FuncAnimation(fig, update, frames=n_frames, interval=1000 / fps, blit=False)
-    writer = animation.PillowWriter(fps=fps)
-    anim.save(output, writer=writer)
-    plt.close(fig)
+    if save:
+        writer = animation.PillowWriter(fps=fps)
+        anim.save(output, writer=writer)
+    if show:
+        update(n_frames // 2)
+        plt.show()
+    else:
+        plt.close(fig)
