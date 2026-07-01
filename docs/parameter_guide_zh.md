@@ -92,8 +92,9 @@ lambda = VR / f
 - `cylinder:x,y,h,radius,height,strength`
 - `ellipsoid:x,y,h,size_x,size_y,size_z,strength`
 - `line:x,y,h,length,azimuth,strength`
+- `zone:x,y,h,length,azimuth,strength`
 
-正演会叠加多个异常体的散射响应。当前扫描默认仍寻找主异常体；多异常联合反演可后续采用“定位一个、减去一个、再扫描”的迭代方式。
+`zone` 与 `line` 的输入参数相同，但内部会生成一组带宽方向的散射点，因此表示有一定宽度的松散带，而不是一条单线。正演会叠加多个异常体、多个散射点的散射响应。当前扫描默认仍寻找主异常体；多异常联合反演可后续采用“定位一个、减去一个、再扫描”的迭代方式。
 
 ## 噪声与耦合参数
 
@@ -135,6 +136,35 @@ lambda = VR / f
 
 建议本地调参用 `--show --no-save`，汇报出图用 `--save --outdir outputs/<功能名>`。
 
+## 小尺度 3D elastic FDTD 参数
+
+`elastic3d` 是独立实验子命令，不是默认 workflow 的一部分：
+
+```bash
+python main.py elastic3d --save
+python main.py elastic3d --animate --save
+```
+
+常用参数：
+
+- `--nx/--ny/--nz`：小模型三维网格数。默认很小，用于本地快速运行；
+- `--dx/--dy/--dz`：空间网格间距，单位 m。网格越小，分辨率越高，但 CFL 更严格；
+- `--elastic-dt`：时间步长，单位 s。必须满足 CFL 稳定条件；
+- `--elastic-nt`：时间步数。越大传播时间越长，计算越慢；
+- `--elastic-source-frequency`：Ricker 震源主频，单位 Hz；
+- `--elastic-source-amplitude`：垂向力源幅度；
+- `--elastic-no-anomaly`：关闭低速低密度异常体，用于和有异常模型对比。
+
+CFL 检查公式为：
+
+```text
+CFL = vmax * dt * sqrt(1/dx^2 + 1/dy^2 + 1/dz^2)
+```
+
+当前要求 `CFL < 0.45`。如果参数不稳定，程序会报错，而不是输出可能误导的波场图。
+
+注意：elastic3d 默认坐标范围是小模型范围，不等同于道路 workflow 的 80 m 沿线范围。如果给 `elastic3d` 显式传入 `--anomalies`，异常体坐标必须落在这个小模型范围内才会影响波场。
+
 ## 常见错误设置
 
 - 采样率太低：高频锤击信号混叠；
@@ -144,3 +174,4 @@ lambda = VR / f
 - 噪声很强但仍输出高置信度，需警惕误报；
 - `VR` 与真实速度偏差过大；
 - `road_width` 与实际锤击线-光纤线距离不一致。
+- 对 `elastic3d` 使用道路尺度异常体坐标，例如默认道路异常 `x=42 m`，但小模型长度只有约 28 m，导致异常体不在模型内。

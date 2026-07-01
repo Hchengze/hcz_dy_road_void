@@ -64,12 +64,29 @@ def test_anomalies_string_parses_multiple_shapes():
 
 
 def test_anomaly_shapes_generate_scatter_points():
-    for shape in ["sphere", "box", "cylinder", "ellipsoid", "line"]:
+    signatures = {}
+    for shape in ["sphere", "box", "cylinder", "ellipsoid", "line", "zone"]:
         cavity = Cavity(x0=10, y0=5, h=2, radius=2, shape=shape, size_x=4, size_y=3, size_z=1)
         points, weights = cavity.scatter_points()
         assert points.shape[0] >= 2
         assert points.shape[1] == 3
         assert np.isclose(np.sum(weights), 1.0)
+        signatures[shape] = (points.shape[0], tuple(np.round(np.ptp(points, axis=0), 3)))
+    assert len(set(signatures.values())) >= 5
+
+
+def test_cylinder_ellipsoid_line_parse_without_error():
+    parser = build_parser()
+    for spec in [
+        "cylinder:42,8.5,2.2,2.0,4.0,1.0",
+        "ellipsoid:42,8.5,2.2,3.0,1.5,1.0,1.0",
+        "line:42,8.5,2.2,12.0,0.0,1.0",
+        "zone:42,8.5,2.2,12.0,0.0,1.0",
+    ]:
+        args = parser.parse_args(["workflow", "--anomalies", spec, "--no-save"])
+        cavities = config_from_args(args).to_cavities()
+        assert len(cavities) == 1
+        assert cavities[0].scatter_points()[0].shape[0] > 1
 
 
 def test_multi_anomaly_forward_differs_from_single_anomaly():

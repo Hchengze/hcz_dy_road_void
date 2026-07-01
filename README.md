@@ -2,7 +2,12 @@
 
 这是一个本地算法研究原型，用于探索“道路一侧 DAS 光纤接收 + 道路另一侧锤击激发”的城市道路空洞/脱空/松散异常体探测方法。项目目标是便于直接运行、修改参数、查看图件、理解公式和验证算法闭环；不追求发布、安装或生产级工程化。
 
-当前核心仍是三维等效瑞雷波运动学/属性正演，不是完整三维弹性波全波形模拟。
+当前有两条正演路线：
+
+- 默认 workflow 使用快速三维等效瑞雷波运动学/属性正演，用于几何验证、合成数据和绕射扫描定位。
+- `elastic3d` 子命令提供小尺度三维弹性波全波形有限差分原型，用于理解更接近真实波场的传播、散射和接收现象。
+
+默认 `python main.py` 仍运行快速 workflow；`elastic3d` 是独立实验模块，当前不替代绕射扫描定位主线。
 
 ## 推荐入口
 
@@ -48,6 +53,7 @@ python main.py tutorial --save
 - `scan`：做绕射扫描定位，输出最佳候选和评分图。
 - `sensitivity`：做参数敏感性分析，输出少量趋势图和 CSV。
 - `tutorial`：生成一套不重复的教学流程图。
+- `elastic3d`：运行小尺度三维弹性波全波形有限差分原型，输出速度切片、波场快照和接收记录。
 - `workflow`：默认完整流程入口，控制台按算法步骤解释，输出一套代表性图件。
 - `all`：当前作为 `workflow` 的别名，保留给习惯使用 `all` 的场景；日常推荐使用 `workflow` 或直接 `python main.py`。
 
@@ -117,7 +123,11 @@ outputs/wavefield/wavefield_frame_hit_cavity.png
 outputs/wavefield/wavefield_frame_scattered.png
 ```
 
-这些图和 GIF 都是“等效运动学传播示意”，用于理解直达波前、异常体散射和 DAS 接收线位置，不是完整弹性波场快照。
+这些图和 GIF 都是“等效运动学传播示意”，用于理解直达波前、异常体散射触发时刻和 DAS 接收线位置，不是完整弹性波场快照。当前实现中散射波只有在直达波从震源传播到异常体之后才出现，三张关键帧含义为：
+
+- `early`：直达波刚离开震源，异常体散射不应出现；
+- `hit_cavity`：直达波前接近或到达第一个异常体；
+- `scattered`：异常体散射波已经从异常体位置向外传播。
 
 ## 常用参数
 
@@ -171,8 +181,43 @@ python main.py workflow --anomalies "sphere:42,8.5,2.2,2.0,1.0;box:58,6,1.5,4,3,
 - `cylinder:x,y,h,radius,height,strength`
 - `ellipsoid:x,y,h,size_x,size_y,size_z,strength`
 - `line:x,y,h,length,azimuth,strength`
+- `zone:x,y,h,length,azimuth,strength`
 
 当前 shape 只是等效散射几何模型：每个异常体会被离散成少量散射点，叠加多条 `S-D-G` 绕射路径。它用于研究形状、尺度和位置对合成响应的影响，不代表真实弹性边界散射。当前扫描仍默认寻找主异常体；多异常联合反演可后续扩展为“找一个、减去、再找下一个”的迭代流程。
+
+各 shape 在运动学正演中的散射点含义：
+
+- `sphere`：中心点加六个方向点；
+- `box`：中心、八个角点和六个面中心；
+- `cylinder`：柱面圆周点和上下端面点；
+- `ellipsoid`：椭球赤道和一个竖向子午面采样点；
+- `line`：沿给定方位角的一串散射点；
+- `zone`：沿给定方位角的长条带状散射点集合。
+
+## 小尺度 3D elastic FDTD 原型
+
+`elastic3d` 用于和默认运动学模型形成对比：
+
+```bash
+python main.py elastic3d --no-save
+python main.py elastic3d --save
+python main.py elastic3d --animate --save
+```
+
+默认输出：
+
+```text
+outputs/elastic3d/velocity_model_slice.png
+outputs/elastic3d/wavefield_snapshot_early.png
+outputs/elastic3d/wavefield_snapshot_mid.png
+outputs/elastic3d/wavefield_snapshot_late.png
+outputs/elastic3d/elastic3d_gather.png
+outputs/elastic3d/elastic3d_wavefield.gif  # 仅 --animate --save 时生成
+```
+
+它实现的是小尺度三维各向同性 velocity-stress 有限差分原型，变量包括 `vx/vy/vz` 和 `sxx/syy/szz/sxy/sxz/syz`，模型参数包括 `Vp/Vs/rho/lambda/mu`。它会做 CFL 稳定性检查，并使用简化自由表面和 sponge 吸收边界。
+
+注意：`elastic3d` 默认模型尺寸很小，坐标范围与道路 workflow 不完全相同；如果显式传入 `--anomalies`，请确保异常体坐标落在小模型范围内。当前 elastic3d 还不作为扫描定位输入，只用于小模型波场现象验证。
 
 参数含义详见：
 
@@ -252,6 +297,7 @@ python -m pytest -q
 
 ## 当前限制与下一步
 
-- 波场 GIF 是等效运动学传播示意，不是高保真弹性波场快照。
-- `velocity.py` 的层状速度模型目前主要用于教学展示；核心正演/扫描仍使用等效 `VR`。
-- 后续建议扩展：多频带速度约束、FK/扇形滤波、预测滤波绕射增强、多炮联合反演、真实 DAS 触发校正、光纤路径标定和通道耦合 QC。
+- workflow 中的波场 GIF 是等效运动学传播示意，不是高保真弹性波场快照。
+- `layered-effective` 已经让层状速度通过 `VR_eff` 影响运动学正演和扫描，但仍不是完整频散反演。
+- `elastic3d` 更接近真实波场，但目前只是小尺度教学/研究模型，不替代默认定位算法。
+- 后续建议扩展：多频带速度约束、FK/扇形滤波、预测滤波绕射增强、从 elastic3d 波场中提取绕射事件、真实 DAS 触发校正、光纤路径标定和通道耦合 QC。

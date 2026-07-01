@@ -6,6 +6,7 @@ from .forward import ForwardModelConfig, RayleighKinematicForwardModel, Syntheti
 from .geometry import RoadGeometry
 from .scan import CavityScanGrid, CavityScanResult, scan_cavity_diffraction
 from .velocity import LayeredRayleighVelocityModel, VelocityLayer
+from .elastic3d import Elastic3DConfig, Elastic3DResult, run_elastic3d
 
 __all__ = [
     "Cavity",
@@ -19,6 +20,9 @@ __all__ = [
     "SyntheticDataset",
     "LayeredRayleighVelocityModel",
     "VelocityLayer",
+    "Elastic3DConfig",
+    "Elastic3DResult",
+    "run_elastic3d",
     "scan_cavity_diffraction",
     "load_config",
 ]

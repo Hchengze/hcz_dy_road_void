@@ -81,9 +81,13 @@ class Cavity:
             sy = self.size_y or 1.4 * self.radius
             sz = self.size_z or self.radius
             offsets = _ellipsoid_offsets(sx, sy, sz)
-        elif shape in {"line", "zone"}:
+        elif shape == "line":
             length = self.size_x or max(3.0 * self.radius, 1.0)
             offsets = _line_offsets(length, self.azimuth)
+        elif shape == "zone":
+            length = self.size_x or max(3.0 * self.radius, 1.0)
+            width = self.size_y or max(1.5 * self.radius, 0.5)
+            offsets = _zone_offsets(length, width, self.azimuth)
         else:
             raise ValueError(f"未知异常体形状: {self.shape}")
         points = center[None, :] + offsets
@@ -106,7 +110,8 @@ class Cavity:
 def _box_offsets(size_x: float, size_y: float, size_z: float) -> NDArray[np.float64]:
     hx, hy, hz = 0.5 * size_x, 0.5 * size_y, 0.5 * size_z
     corners = [[sx * hx, sy * hy, sz * hz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]
-    return np.asarray([[0.0, 0.0, 0.0], *corners], dtype=float)
+    faces = [[hx, 0, 0], [-hx, 0, 0], [0, hy, 0], [0, -hy, 0], [0, 0, hz], [0, 0, -hz]]
+    return np.asarray([[0.0, 0.0, 0.0], *corners, *faces], dtype=float)
 
 
 def _cylinder_offsets(radius: float, height: float) -> NDArray[np.float64]:
@@ -118,18 +123,9 @@ def _cylinder_offsets(radius: float, height: float) -> NDArray[np.float64]:
 
 def _ellipsoid_offsets(size_x: float, size_y: float, size_z: float) -> NDArray[np.float64]:
     ax, ay, az = 0.5 * size_x, 0.5 * size_y, 0.5 * size_z
-    return np.asarray(
-        [
-            [0.0, 0.0, 0.0],
-            [ax, 0.0, 0.0],
-            [-ax, 0.0, 0.0],
-            [0.0, ay, 0.0],
-            [0.0, -ay, 0.0],
-            [0.0, 0.0, az],
-            [0.0, 0.0, -az],
-        ],
-        dtype=float,
-    )
+    equator = [[ax * np.cos(a), ay * np.sin(a), 0.0] for a in np.linspace(0.0, 2.0 * np.pi, 8, endpoint=False)]
+    meridian_x = [[ax * np.cos(a), 0.0, az * np.sin(a)] for a in np.linspace(0.0, 2.0 * np.pi, 8, endpoint=False)]
+    return np.asarray([[0.0, 0.0, 0.0], *equator, *meridian_x], dtype=float)
 
 
 def _line_offsets(length: float, azimuth: float) -> NDArray[np.float64]:
@@ -137,3 +133,12 @@ def _line_offsets(length: float, azimuth: float) -> NDArray[np.float64]:
     direction = np.asarray([np.cos(theta), np.sin(theta), 0.0], dtype=float)
     samples = np.linspace(-0.5 * length, 0.5 * length, 7)
     return samples[:, None] * direction[None, :]
+
+
+def _zone_offsets(length: float, width: float, azimuth: float) -> NDArray[np.float64]:
+    theta = np.deg2rad(azimuth)
+    along = np.asarray([np.cos(theta), np.sin(theta), 0.0], dtype=float)
+    cross = np.asarray([-np.sin(theta), np.cos(theta), 0.0], dtype=float)
+    xs = np.linspace(-0.5 * length, 0.5 * length, 7)
+    ys = np.linspace(-0.5 * width, 0.5 * width, 3)
+    return np.asarray([x * along + y * cross for x in xs for y in ys], dtype=float)

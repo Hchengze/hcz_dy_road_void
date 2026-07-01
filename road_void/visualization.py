@@ -10,6 +10,7 @@ from pathlib import Path
 
 import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib import patches
 from matplotlib import animation, font_manager
 import numpy as np
 from numpy.typing import NDArray
@@ -32,6 +33,95 @@ def _shape_marker(cavity: Cavity) -> str:
         "line": "x",
         "zone": "x",
     }.get(cavity.shape.lower(), "o")
+
+
+def _rotated_rectangle(cx: float, cy: float, length: float, width: float, azimuth: float) -> NDArray[np.float64]:
+    theta = np.deg2rad(azimuth)
+    along = np.asarray([np.cos(theta), np.sin(theta)])
+    cross = np.asarray([-np.sin(theta), np.cos(theta)])
+    corners = []
+    for sx, sy in [(-1, -1), (1, -1), (1, 1), (-1, 1)]:
+        p = np.asarray([cx, cy]) + sx * 0.5 * length * along + sy * 0.5 * width * cross
+        corners.append(p)
+    return np.asarray(corners, dtype=float)
+
+
+def _draw_anomaly_plan(ax: plt.Axes, cavity: Cavity, label: str | None = None) -> None:
+    """在 x-y 平面画出不同异常体的简化几何轮廓。"""
+
+    shape = cavity.shape.lower()
+    color = "darkorange"
+    if shape == "sphere":
+        ax.add_patch(patches.Circle((cavity.x0, cavity.y0), cavity.radius, fill=False, ec=color, lw=2, label=label))
+    elif shape == "box":
+        sx = cavity.size_x or 2 * cavity.radius
+        sy = cavity.size_y or 2 * cavity.radius
+        ax.add_patch(patches.Rectangle((cavity.x0 - sx / 2, cavity.y0 - sy / 2), sx, sy, fill=False, ec=color, lw=2, label=label))
+    elif shape == "cylinder":
+        r = cavity.size_x or cavity.radius
+        ax.add_patch(patches.Circle((cavity.x0, cavity.y0), r, fill=False, ec=color, lw=2, label=label))
+        ax.plot([cavity.x0], [cavity.y0], marker="+", color=color, ms=10)
+    elif shape == "ellipsoid":
+        sx = cavity.size_x or 2 * cavity.radius
+        sy = cavity.size_y or 1.4 * cavity.radius
+        ax.add_patch(patches.Ellipse((cavity.x0, cavity.y0), sx, sy, fill=False, ec=color, lw=2, label=label))
+    elif shape == "line":
+        length = cavity.size_x or 3 * cavity.radius
+        pts = _rotated_rectangle(cavity.x0, cavity.y0, length, 0.05 * max(length, 1.0), cavity.azimuth)
+        ax.plot(pts[[0, 1], 0], pts[[0, 1], 1], color=color, lw=3, label=label)
+    elif shape == "zone":
+        length = cavity.size_x or 3 * cavity.radius
+        width = cavity.size_y or 1.5 * cavity.radius
+        pts = _rotated_rectangle(cavity.x0, cavity.y0, length, width, cavity.azimuth)
+        ax.add_patch(patches.Polygon(pts, fill=False, ec=color, lw=2, label=label))
+    points, _ = cavity.scatter_points()
+    ax.scatter(points[:, 0], points[:, 1], s=12, c=color, alpha=0.55)
+
+
+def _draw_anomaly_xz(ax: plt.Axes, cavity: Cavity) -> None:
+    shape = cavity.shape.lower()
+    color = "darkorange"
+    if shape in {"sphere", "cylinder"}:
+        width = 2 * (cavity.size_x or cavity.radius)
+        height = cavity.size_z or (2 * cavity.radius if shape == "sphere" else 2 * cavity.radius)
+        ax.add_patch(patches.Ellipse((cavity.x0, cavity.h), width, height, fill=False, ec=color, lw=2))
+    elif shape == "box":
+        sx = cavity.size_x or 2 * cavity.radius
+        sz = cavity.size_z or cavity.radius
+        ax.add_patch(patches.Rectangle((cavity.x0 - sx / 2, cavity.h - sz / 2), sx, sz, fill=False, ec=color, lw=2))
+    elif shape == "ellipsoid":
+        sx = cavity.size_x or 2 * cavity.radius
+        sz = cavity.size_z or cavity.radius
+        ax.add_patch(patches.Ellipse((cavity.x0, cavity.h), sx, sz, fill=False, ec=color, lw=2))
+    elif shape in {"line", "zone"}:
+        length = abs(np.cos(np.deg2rad(cavity.azimuth))) * (cavity.size_x or 3 * cavity.radius)
+        height = cavity.size_z or 0.25
+        ax.add_patch(patches.Rectangle((cavity.x0 - length / 2, cavity.h - height / 2), max(length, 0.2), height, fill=False, ec=color, lw=2))
+    points, _ = cavity.scatter_points()
+    ax.scatter(points[:, 0], points[:, 2], s=12, c=color, alpha=0.55)
+
+
+def _draw_anomaly_yz(ax: plt.Axes, cavity: Cavity) -> None:
+    shape = cavity.shape.lower()
+    color = "darkorange"
+    if shape in {"sphere", "cylinder"}:
+        width = 2 * (cavity.size_x or cavity.radius)
+        height = cavity.size_z or (2 * cavity.radius if shape == "sphere" else 2 * cavity.radius)
+        ax.add_patch(patches.Ellipse((cavity.y0, cavity.h), width, height, fill=False, ec=color, lw=2))
+    elif shape == "box":
+        sy = cavity.size_y or 2 * cavity.radius
+        sz = cavity.size_z or cavity.radius
+        ax.add_patch(patches.Rectangle((cavity.y0 - sy / 2, cavity.h - sz / 2), sy, sz, fill=False, ec=color, lw=2))
+    elif shape == "ellipsoid":
+        sy = cavity.size_y or 1.4 * cavity.radius
+        sz = cavity.size_z or cavity.radius
+        ax.add_patch(patches.Ellipse((cavity.y0, cavity.h), sy, sz, fill=False, ec=color, lw=2))
+    elif shape in {"line", "zone"}:
+        length = abs(np.sin(np.deg2rad(cavity.azimuth))) * (cavity.size_x or 3 * cavity.radius)
+        width = cavity.size_y if shape == "zone" else 0.2
+        ax.add_patch(patches.Rectangle((cavity.y0 - max(length, width or 0.2) / 2, cavity.h - 0.12), max(length, width or 0.2), 0.24, fill=False, ec=color, lw=2))
+    points, _ = cavity.scatter_points()
+    ax.scatter(points[:, 1], points[:, 2], s=12, c=color, alpha=0.55)
 
 
 def _configure_chinese_font() -> None:
@@ -263,6 +353,8 @@ def plot_road_geometry_3d(
     for cavity in cavities:
         ax.scatter(cavity.x0, cavity.y0, cavity.h, s=130, c="orange", marker=_shape_marker(cavity), edgecolors="k", label=f"{cavity.shape}:{cavity.label}")
         ax.plot([cavity.x0, cavity.x0], [cavity.y0, cavity.y0], [0, cavity.h], "k:", lw=1)
+        points, _ = cavity.scatter_points()
+        ax.scatter(points[:, 0], points[:, 1], points[:, 2], s=14, c="darkorange", alpha=0.6)
     ax.text(x_min, geometry.road_width * 0.5, 0.4, f"W={geometry.road_width:.1f} m", color="k")
     ax.set_xlabel("x 沿道路/光纤方向 (m)")
     ax.set_ylabel("y 横穿道路方向 (m)")
@@ -291,8 +383,9 @@ def plot_geometry_plan_and_sections(
     axes[0].plot(geometry.channel_x, np.full_like(geometry.channel_x, geometry.fiber_y), "b-", lw=2, label="DAS 光纤")
     axes[0].scatter(geometry.channel_x, np.full_like(geometry.channel_x, geometry.fiber_y), s=10, c="b", alpha=0.5)
     axes[0].scatter(geometry.shot_x, np.full_like(geometry.shot_x, float(geometry.shot_y)), s=26, c="r", label="锤击点")
-    for cavity in cavities:
-        axes[0].scatter(cavity.x0, cavity.y0, s=110, c="orange", marker=_shape_marker(cavity), edgecolors="k", label=f"{cavity.shape} 异常体")
+    for idx, cavity in enumerate(cavities):
+        _draw_anomaly_plan(axes[0], cavity, label=f"{cavity.shape} 异常体" if idx == 0 else None)
+        axes[0].scatter(cavity.x0, cavity.y0, s=80, c="orange", marker=_shape_marker(cavity), edgecolors="k")
     axes[0].set_xlabel("x (m)")
     axes[0].set_ylabel("y (m)")
     axes[0].set_title("x-y 平面布设")
@@ -301,7 +394,8 @@ def plot_geometry_plan_and_sections(
 
     axes[1].axhline(0, color="0.25", lw=1)
     for cavity in cavities:
-        axes[1].scatter(cavity.x0, cavity.h, s=110, c="orange", marker=_shape_marker(cavity), edgecolors="k")
+        _draw_anomaly_xz(axes[1], cavity)
+        axes[1].scatter(cavity.x0, cavity.h, s=80, c="orange", marker=_shape_marker(cavity), edgecolors="k")
         axes[1].vlines(cavity.x0, 0, cavity.h, color="0.35", linestyles=":")
     axes[1].set_xlim(x_min, x_max)
     axes[1].set_ylim(6, -0.5)
@@ -312,8 +406,9 @@ def plot_geometry_plan_and_sections(
     axes[2].axhline(0, color="0.25", lw=1)
     axes[2].axvline(geometry.fiber_y, color="b", lw=2, label="光纤侧")
     axes[2].axvline(float(geometry.shot_y), color="r", lw=2, linestyle="--", label="锤击侧")
-    for cavity in cavities:
-        axes[2].scatter(cavity.y0, cavity.h, s=110, c="orange", marker=_shape_marker(cavity), edgecolors="k", label=f"{cavity.shape} 异常体")
+    for idx, cavity in enumerate(cavities):
+        _draw_anomaly_yz(axes[2], cavity)
+        axes[2].scatter(cavity.y0, cavity.h, s=80, c="orange", marker=_shape_marker(cavity), edgecolors="k", label=f"{cavity.shape} 异常体" if idx == 0 else None)
     axes[2].set_xlim(geometry.fiber_y - 2, float(geometry.shot_y) + 2)
     axes[2].set_ylim(6, -0.5)
     axes[2].set_xlabel("y (m)")
@@ -400,6 +495,93 @@ def plot_diffraction_path_demo(
     _finish_figure(output, save=save, show=show, dpi=dpi)
 
 
+def compute_direct_wavefield_snapshot(
+    geometry: RoadGeometry,
+    source_index: int,
+    velocity: float,
+    frame_time: float,
+    t0: float,
+    xx: FloatArray,
+    yy: FloatArray,
+    sigma: float,
+) -> tuple[FloatArray, float]:
+    """计算直达波等效运动学快照。
+
+    这是平面 x-y 上的传播示意：用高斯等时圈表示直达瑞雷波前，不是弹性
+    波方程数值快照。返回值包括示意振幅场和当前直达波前半径。
+    """
+
+    sx, sy, _ = geometry.shot_xyz[source_index]
+    radius = max(0.0, velocity * (frame_time - t0))
+    dist = np.sqrt((xx - sx) ** 2 + (yy - sy) ** 2)
+    spreading = 1.0 / np.sqrt(np.maximum(radius, 1.0))
+    field = spreading * np.exp(-0.5 * ((dist - radius) / sigma) ** 2)
+    return field, radius
+
+
+def compute_scattered_wavefield_snapshot(
+    geometry: RoadGeometry,
+    cavities: list[Cavity],
+    source_index: int,
+    velocity: float,
+    frame_time: float,
+    t0: float,
+    xx: FloatArray,
+    yy: FloatArray,
+    sigma: float,
+) -> tuple[FloatArray, list[tuple[Cavity, float, float]]]:
+    """计算异常体散射波等效运动学快照。
+
+    每个异常体先等待直达波从震源到达其三维散射中心，触发时间为
+    ``t0 + |S-D|/VR``；之后才从异常体平面位置向外扩散。该函数只用于
+    传播路径教学展示，不代表真实弹性散射场。
+    """
+
+    sx, sy, sz = geometry.shot_xyz[source_index]
+    scatter = np.zeros_like(xx, dtype=float)
+    fronts: list[tuple[Cavity, float, float]] = []
+    for cav in cavities:
+        sd = np.sqrt((sx - cav.x0) ** 2 + (sy - cav.y0) ** 2 + (sz - cav.h) ** 2)
+        trigger = t0 + sd / velocity
+        if frame_time < trigger:
+            fronts.append((cav, trigger, -1.0))
+            continue
+        radius = velocity * (frame_time - trigger)
+        dist = np.sqrt((xx - cav.x0) ** 2 + (yy - cav.y0) ** 2)
+        spreading = 1.0 / np.sqrt(np.maximum(sd + radius, 1.0))
+        scatter += 0.7 * cav.scattering_strength * spreading * np.exp(-0.5 * ((dist - radius) / sigma) ** 2)
+        fronts.append((cav, trigger, radius))
+    return scatter, fronts
+
+
+def _wavefield_grid(geometry: RoadGeometry) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray]:
+    x = np.linspace(float(geometry.channel_x[0]), float(geometry.channel_x[-1]), 220)
+    y = np.linspace(geometry.fiber_y, float(geometry.shot_y), 120)
+    xx, yy = np.meshgrid(x, y)
+    return x, y, xx, yy
+
+
+def _wavefield_frame_times(
+    geometry: RoadGeometry,
+    cavities: list[Cavity],
+    source_index: int,
+    velocity: float,
+    t0: float,
+) -> dict[str, float]:
+    sx, sy, sz = geometry.shot_xyz[source_index]
+    hit_times = [
+        t0 + np.sqrt((sx - cav.x0) ** 2 + (sy - cav.y0) ** 2 + (sz - cav.h) ** 2) / velocity
+        for cav in cavities
+    ]
+    first_hit = min(hit_times)
+    travel_to_hit = max(first_hit - t0, geometry.dt)
+    return {
+        "wavefield_frame_early.png": t0 + 0.35 * travel_to_hit,
+        "wavefield_frame_hit_cavity.png": first_hit,
+        "wavefield_frame_scattered.png": min(geometry.t_max * 0.8, first_hit + max(0.08, 0.55 * travel_to_hit)),
+    }
+
+
 def animate_kinematic_wavefield(
     geometry: RoadGeometry,
     cavity: Cavity | list[Cavity],
@@ -412,10 +594,10 @@ def animate_kinematic_wavefield(
     save: bool = True,
     show: bool = False,
 ) -> None:
-    """生成等效运动学波场 GIF，展示直达波前与空洞散射波前。
+    """生成等效运动学波场 GIF，展示直达波前与异常体散射波前。
 
-    动画中的“波场”由走时圆环和简化振幅构成，只用于解释传播路径、
-    绕射出现时刻和 DAS 接收线位置，不应解释为严格弹性波场快照。
+    动画使用等时圈和简化高斯波包构造，只用于检查传播顺序、散射触发
+    时刻和几何关系，不是严格弹性波场快照。
     """
 
     output = Path(output)
@@ -424,59 +606,56 @@ def animate_kinematic_wavefield(
     cavities = cavity if isinstance(cavity, list) else [cavity]
     if not cavities:
         raise ValueError("至少需要一个异常体才能展示散射波场。")
-    sx, sy, _ = geometry.shot_xyz[source_index]
-    x = np.linspace(float(geometry.channel_x[0]), float(geometry.channel_x[-1]), 180)
-    y = np.linspace(geometry.fiber_y, float(geometry.shot_y), 90)
-    xx, yy = np.meshgrid(x, y)
-    dist_source = np.sqrt((xx - sx) ** 2 + (yy - sy) ** 2)
-    times = np.linspace(t0, geometry.t_max * 0.65, n_frames)
-    sigma = max(0.8, velocity * geometry.dt * 3.0)
+    x, y, xx, yy = _wavefield_grid(geometry)
+    sigma = max(0.8, 0.7 * velocity * geometry.dt * 8.0)
+    frame_times = _wavefield_frame_times(geometry, cavities, source_index, velocity, t0)
+    t_end = min(geometry.t_max * 0.8, max(frame_times.values()) + 0.12)
+    times = np.linspace(t0, t_end, n_frames)
 
-    fig, ax = plt.subplots(figsize=(8.5, 5.2))
-    image = ax.imshow(
-        np.zeros_like(xx),
-        origin="lower",
-        extent=[x[0], x[-1], y[0], y[-1]],
-        aspect="auto",
-        cmap="inferno",
-        vmin=0,
-        vmax=1.1,
-    )
-    ax.plot(geometry.channel_x, np.full_like(geometry.channel_x, geometry.fiber_y), "c-", lw=2, label="DAS 光纤")
-    ax.scatter(geometry.shot_x, np.full_like(geometry.shot_x, float(geometry.shot_y)), s=12, c="w", alpha=0.5, label="锤击点")
-    ax.scatter([sx], [sy], s=90, c="lime", edgecolors="k", label="当前震源")
-    for cav in cavities:
-        ax.scatter([cav.x0], [cav.y0], s=110, c="orange", marker=_shape_marker(cav), edgecolors="k", label=f"{cav.shape} 异常体")
-    ax.set_xlabel("x 沿道路方向 (m)")
-    ax.set_ylabel("y 横穿道路方向 (m)")
-    ax.set_title("等效运动学波场示意")
-    ax.legend(loc="upper right")
-    time_text = ax.text(0.02, 0.94, "", transform=ax.transAxes, color="w", fontsize=11)
+    fig, ax = plt.subplots(figsize=(8.8, 5.4))
+
+    def draw_frame(frame_time: float) -> list[object]:
+        ax.clear()
+        direct, direct_radius = compute_direct_wavefield_snapshot(geometry, source_index, velocity, frame_time, t0, xx, yy, sigma)
+        scatter, fronts = compute_scattered_wavefield_snapshot(geometry, cavities, source_index, velocity, frame_time, t0, xx, yy, sigma)
+        field = direct + scatter
+        im = ax.imshow(
+            field,
+            origin="lower",
+            extent=[x[0], x[-1], y[0], y[-1]],
+            aspect="auto",
+            cmap="inferno",
+            vmin=0.0,
+            vmax=max(0.35, float(np.percentile(field, 99.8))),
+        )
+        sx, sy, _ = geometry.shot_xyz[source_index]
+        ax.plot(geometry.channel_x, np.full_like(geometry.channel_x, geometry.fiber_y), "c-", lw=2, label="DAS 光纤")
+        ax.plot(geometry.shot_x, np.full_like(geometry.shot_x, float(geometry.shot_y)), "w.", ms=3, alpha=0.5, label="锤击线")
+        ax.scatter([sx], [sy], s=90, c="lime", edgecolors="k", label="当前震源")
+        ax.add_patch(patches.Circle((sx, sy), direct_radius, fill=False, ec="white", lw=1.5, ls="--", alpha=0.9))
+        for cav, trigger, radius in fronts:
+            _draw_anomaly_plan(ax, cav, None)
+            if radius >= 0:
+                ax.add_patch(patches.Circle((cav.x0, cav.y0), radius, fill=False, ec="deepskyblue", lw=1.5, ls=":", alpha=0.9))
+            ax.text(cav.x0, cav.y0, f"{cav.shape}\n触发 {trigger:.3f}s", color="white", fontsize=8, ha="center", va="bottom")
+        ax.set_xlim(x[0], x[-1])
+        ax.set_ylim(y[0], y[-1])
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel("x 沿道路方向 (m)")
+        ax.set_ylabel("y 横穿道路方向 (m)")
+        ax.set_title(f"等效运动学传播示意，不是严格弹性波场快照；t={frame_time:.3f} s")
+        ax.legend(loc="upper right", fontsize=8)
+        return [im]
 
     def update(frame: int) -> list[object]:
-        t = times[frame]
-        direct_radius = max(0.0, velocity * (t - t0))
-        direct = np.exp(-0.5 * ((dist_source - direct_radius) / sigma) ** 2)
-        scatter = np.zeros_like(direct)
-        for cav in cavities:
-            dist_cavity = np.sqrt((xx - cav.x0) ** 2 + (yy - cav.y0) ** 2)
-            source_to_cavity = np.sqrt((sx - cav.x0) ** 2 + (sy - cav.y0) ** 2 + cav.h**2)
-            t_scatter_start = t0 + source_to_cavity / velocity
-            if t > t_scatter_start:
-                scatter_radius = velocity * (t - t_scatter_start)
-                scatter += cav.scattering_strength * np.exp(-0.5 * ((dist_cavity - scatter_radius) / sigma) ** 2)
-        field = direct + scatter
-        field /= max(float(np.max(field)), 1e-9)
-        image.set_data(field)
-        time_text.set_text(f"t = {t:.3f} s")
-        return [image, time_text]
+        return draw_frame(float(times[frame]))
 
     anim = animation.FuncAnimation(fig, update, frames=n_frames, interval=1000 / fps, blit=False)
     if save:
         writer = animation.PillowWriter(fps=fps)
         anim.save(output, writer=writer)
     if show:
-        update(n_frames // 2)
+        draw_frame(float(times[min(n_frames // 2, n_frames - 1)]))
         plt.show()
     else:
         plt.close(fig)
@@ -502,14 +681,7 @@ def plot_kinematic_wavefield_frames(
     if not cavities:
         return
     outdir = Path(outdir)
-    sx, sy, _ = geometry.shot_xyz[source_index]
-    primary = cavities[0]
-    hit_time = t0 + np.sqrt((sx - primary.x0) ** 2 + (sy - primary.y0) ** 2 + primary.h**2) / velocity
-    frame_times = {
-        "wavefield_frame_early.png": max(t0 + 0.08, 0.45 * hit_time),
-        "wavefield_frame_hit_cavity.png": hit_time,
-        "wavefield_frame_scattered.png": min(geometry.t_max * 0.75, hit_time + 0.12),
-    }
+    frame_times = _wavefield_frame_times(geometry, cavities, source_index, velocity, t0)
     for filename, frame_time in frame_times.items():
         _plot_single_wavefield_frame(
             geometry,
@@ -538,30 +710,28 @@ def _plot_single_wavefield_frame(
     dpi: int,
 ) -> None:
     sx, sy, _ = geometry.shot_xyz[source_index]
-    x = np.linspace(float(geometry.channel_x[0]), float(geometry.channel_x[-1]), 180)
-    y = np.linspace(geometry.fiber_y, float(geometry.shot_y), 90)
-    xx, yy = np.meshgrid(x, y)
-    sigma = max(0.8, velocity * geometry.dt * 3.0)
-    dist_source = np.sqrt((xx - sx) ** 2 + (yy - sy) ** 2)
-    direct_radius = max(0.0, velocity * (frame_time - t0))
-    field = np.exp(-0.5 * ((dist_source - direct_radius) / sigma) ** 2)
-    for cav in cavities:
-        dist_cavity = np.sqrt((xx - cav.x0) ** 2 + (yy - cav.y0) ** 2)
-        source_to_cavity = np.sqrt((sx - cav.x0) ** 2 + (sy - cav.y0) ** 2 + cav.h**2)
-        t_scatter_start = t0 + source_to_cavity / velocity
-        if frame_time > t_scatter_start:
-            scatter_radius = velocity * (frame_time - t_scatter_start)
-            field += cav.scattering_strength * np.exp(-0.5 * ((dist_cavity - scatter_radius) / sigma) ** 2)
-    field /= max(float(np.max(field)), 1e-9)
+    x, y, xx, yy = _wavefield_grid(geometry)
+    sigma = max(0.8, 0.7 * velocity * geometry.dt * 8.0)
+    direct, direct_radius = compute_direct_wavefield_snapshot(geometry, source_index, velocity, frame_time, t0, xx, yy, sigma)
+    scatter, fronts = compute_scattered_wavefield_snapshot(geometry, cavities, source_index, velocity, frame_time, t0, xx, yy, sigma)
+    field = direct + scatter
     plt.figure(figsize=(8.5, 5.2))
-    plt.imshow(field, origin="lower", extent=[x[0], x[-1], y[0], y[-1]], aspect="auto", cmap="inferno", vmin=0, vmax=1.1)
+    plt.imshow(field, origin="lower", extent=[x[0], x[-1], y[0], y[-1]], aspect="auto", cmap="inferno", vmin=0, vmax=max(0.35, float(np.percentile(field, 99.8))))
     plt.colorbar(label="归一化示意振幅")
     plt.plot(geometry.channel_x, np.full_like(geometry.channel_x, geometry.fiber_y), "c-", lw=2, label="DAS 光纤")
+    plt.plot(geometry.shot_x, np.full_like(geometry.shot_x, float(geometry.shot_y)), "w.", ms=3, alpha=0.5, label="锤击线")
     plt.scatter([sx], [sy], s=90, c="lime", edgecolors="k", label="当前震源")
-    for cav in cavities:
-        plt.scatter([cav.x0], [cav.y0], s=110, c="orange", marker=_shape_marker(cav), edgecolors="k", label=f"{cav.shape} 异常体")
+    plt.gca().add_patch(patches.Circle((sx, sy), direct_radius, fill=False, ec="white", lw=1.5, ls="--", alpha=0.9, label="直达波前"))
+    for cav, trigger, radius in fronts:
+        _draw_anomaly_plan(plt.gca(), cav, None)
+        if radius >= 0:
+            plt.gca().add_patch(patches.Circle((cav.x0, cav.y0), radius, fill=False, ec="deepskyblue", lw=1.5, ls=":", alpha=0.9))
+        plt.text(cav.x0, cav.y0, f"{cav.shape}\n触发 {trigger:.3f}s", color="white", fontsize=8, ha="center", va="bottom")
     plt.xlabel("x 沿道路方向 (m)")
     plt.ylabel("y 横穿道路方向 (m)")
+    plt.xlim(x[0], x[-1])
+    plt.ylim(y[0], y[-1])
+    plt.gca().set_aspect("equal", adjustable="box")
     plt.title(f"等效运动学传播示意，不是严格弹性波场快照；t={frame_time:.3f} s")
     plt.legend(loc="upper right")
     _finish_figure(output, save=save, show=show, dpi=dpi)

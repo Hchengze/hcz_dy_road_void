@@ -19,6 +19,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from road_void.config import CavityConfig, GeometryConfig, NoiseConfig, ProcessingConfig, RecordConfig, RoadVoidConfig, VelocityConfig
+from road_void.elastic3d import Elastic3DConfig, animate_elastic3d_wavefield, plot_elastic3d_outputs, run_elastic3d
 from road_void.visualization import (
     animate_kinematic_wavefield,
     plot_kinematic_wavefield_frames,
@@ -125,6 +126,22 @@ def add_animation_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-animate", action="store_true", help="不生成 GIF，只在 --show 时显示关键帧。")
     parser.add_argument("--frames", type=int, default=48, help="GIF 帧数；越大动画更顺滑但文件更大。")
     parser.add_argument("--fps", type=int, default=10, help="GIF 帧率。")
+
+
+def add_elastic3d_args(parser: argparse.ArgumentParser) -> None:
+    """小尺度三维弹性波全波形原型参数。"""
+
+    parser.add_argument("--nx", type=int, default=56, help="elastic3d x 方向网格数；默认较小，保证本地快速运行。")
+    parser.add_argument("--ny", type=int, default=36, help="elastic3d y 方向网格数。")
+    parser.add_argument("--nz", type=int, default=28, help="elastic3d z 方向网格数，z 为深度。")
+    parser.add_argument("--dx", type=float, default=0.5, help="x 网格间距，单位 m；越小分辨率越高但 CFL 更严格。")
+    parser.add_argument("--dy", type=float, default=0.5, help="y 网格间距，单位 m。")
+    parser.add_argument("--dz", type=float, default=0.5, help="z 网格间距，单位 m。")
+    parser.add_argument("--elastic-dt", type=float, default=0.00012, help="elastic3d 时间步长，单位 s；必须满足 CFL 稳定条件。")
+    parser.add_argument("--elastic-nt", type=int, default=420, help="elastic3d 时间步数；越大传播时间越长但计算更慢，默认保证波能到达接收线。")
+    parser.add_argument("--elastic-source-frequency", type=float, default=60.0, help="elastic3d Ricker 震源主频，单位 Hz。")
+    parser.add_argument("--elastic-source-amplitude", type=float, default=1.0e5, help="elastic3d 垂向力源幅度；过大可能导致图件饱和。")
+    parser.add_argument("--elastic-no-anomaly", action="store_true", help="elastic3d 中关闭低速低密度异常体，用于和有异常模型对比。")
 
 
 def output_options(args: argparse.Namespace) -> dict[str, object]:
@@ -332,6 +349,7 @@ def run_wavefield(args: argparse.Namespace) -> None:
             save=bool(opts["save"]),
             show=bool(opts["show"]),
         )
+        print("已生成 kinematic_wavefield.gif：时间从震源激发连续推进，异常体散射只在 S→D 到时之后出现。")
     else:
         frame_save = bool(opts["save"]) or (not bool(args.no_save) and not bool(opts["show"]))
         plot_kinematic_wavefield_frames(
@@ -345,7 +363,10 @@ def run_wavefield(args: argparse.Namespace) -> None:
             show=bool(opts["show"]),
             dpi=int(opts["dpi"]),
         )
-        print("未启用 --animate：已输出/显示 early、hit_cavity、scattered 三个等效运动学关键帧。")
+        print("未启用 --animate：已输出/显示三个等效运动学关键帧。")
+        print("early: 直达波刚离开震源，散射波不应出现。")
+        print("hit_cavity: 直达波前接近/到达第一个异常体。")
+        print("scattered: 异常体散射波已开始从异常体位置向外传播。")
     save_run_parameters(cfg, outdir, bool(opts["save"]))
     print("说明：该波场是等效运动学传播示意，不是严格弹性波场快照。")
 
@@ -605,6 +626,42 @@ def run_workflow(args: argparse.Namespace) -> None:
     print("真实数据应用前仍需光纤路径标定、锤击触发校正、通道耦合 QC、浅层速度估计和管线/井盖干扰核查。")
 
 
+def run_elastic3d_command(args: argparse.Namespace) -> None:
+    """运行小尺度 3D elastic FDTD 原型，不替代默认运动学 workflow。"""
+
+    outdir = command_outdir(args, "elastic3d")
+    opts = output_options(args)
+    cavities = None
+    if getattr(args, "anomalies", None) and not args.elastic_no_anomaly:
+        cavities = config_from_args(args).to_cavities()
+    cfg = Elastic3DConfig(
+        nx=args.nx,
+        ny=args.ny,
+        nz=args.nz,
+        dx=args.dx,
+        dy=args.dy,
+        dz=args.dz,
+        dt=args.elastic_dt,
+        nt=args.elastic_nt,
+        source_frequency=args.elastic_source_frequency,
+        source_amplitude=args.elastic_source_amplitude,
+        with_anomaly=not args.elastic_no_anomaly,
+    )
+    print("elastic3d：三维弹性波全波形有限差分原型，小尺度教学/研究模型，不是工业级模拟。")
+    print(f"dx/dy/dz = {cfg.dx:.3f}/{cfg.dy:.3f}/{cfg.dz:.3f} m, dt = {cfg.dt:.6f} s, nt = {cfg.nt}")
+    if cavities:
+        print(f"elastic3d 使用显式 --anomalies 输入，共 {len(cavities)} 个低速低密度异常体；请注意坐标需落在小模型范围内。")
+    result = run_elastic3d(cfg, cavities)
+    print(f"vmax = {float(result.model.vp.max()):.1f} m/s")
+    print(f"CFL number = {result.cfl:.3f}，满足稳定条件。")
+    print(f"gather shape = {result.gather.shape} = time x receiver")
+    plot_elastic3d_outputs(result, outdir, save=bool(opts["save"]), show=bool(opts["show"]), dpi=int(opts["dpi"]))
+    if bool(args.animate) and not bool(args.no_animate):
+        animate_elastic3d_wavefield(result, outdir, save=bool(opts["save"]), show=bool(opts["show"]), fps=args.fps)
+        print("已生成 elastic3d_wavefield.gif。")
+    print("输出: velocity_model_slice.png, wavefield_snapshot_*.png, elastic3d_gather.png；--animate 时额外输出 elastic3d_wavefield.gif。")
+
+
 def run_all(args: argparse.Namespace) -> None:
     """all 作为 workflow 的别名，避免维护两套完整流程。"""
 
@@ -624,6 +681,7 @@ def build_parser() -> argparse.ArgumentParser:
         "scan": run_scan,
         "sensitivity": run_sensitivity,
         "tutorial": run_tutorial,
+        "elastic3d": run_elastic3d_command,
         "all": run_all,
     }
     for name, handler in handlers.items():
@@ -633,6 +691,9 @@ def build_parser() -> argparse.ArgumentParser:
         if name in {"scan", "sensitivity", "tutorial", "workflow", "all"}:
             add_scan_args(p)
         if name in {"wavefield", "tutorial", "workflow", "all"}:
+            add_animation_args(p)
+        if name == "elastic3d":
+            add_elastic3d_args(p)
             add_animation_args(p)
         add_output_args(p)
         p.set_defaults(func=handler)

@@ -97,6 +97,36 @@ def test_wavefield_animate_save_generates_gif():
     assert (outdir / "kinematic_wavefield.gif").exists()
 
 
+def test_wavefield_save_generates_physical_key_frames():
+    outdir = Path(".tmp_test_outputs/wavefield_frames")
+    completed = _run_cli("wavefield", "--save", "--outdir", str(outdir))
+    assert "early: 直达波刚离开震源" in completed.stdout
+    assert "hit_cavity" in completed.stdout
+    assert "scattered" in completed.stdout
+    assert (outdir / "wavefield_frame_early.png").exists()
+    assert (outdir / "wavefield_frame_hit_cavity.png").exists()
+    assert (outdir / "wavefield_frame_scattered.png").exists()
+
+
+def test_workflow_cylinder_anomaly_runs_with_coarse_scan():
+    completed = _run_cli(
+        "workflow",
+        "--anomalies",
+        "cylinder:42,8.5,2.2,2.0,4.0,1.0",
+        "--scan-x-step",
+        "6",
+        "--scan-y-step",
+        "4",
+        "--scan-h-step",
+        "1.6",
+        "--scan-vr-step",
+        "40",
+        "--no-save",
+    )
+    assert "异常体数量=1" in completed.stdout
+    assert "shape 仅表示等效散射几何" in completed.stdout
+
+
 def test_main_tutorial_no_save_is_compact():
     completed = _run_cli("tutorial", "--no-save")
     assert "教学流程完成" in completed.stdout
@@ -171,3 +201,12 @@ def test_readme_no_longer_recommends_config_as_main_entry():
     assert "python main.py scan --config" not in text
     assert "layered-effective" in text
     assert "不是完整弹性波场" in text
+    assert "elastic3d" in text
+
+
+def test_docs_explain_elastic3d_is_small_scale_prototype():
+    text = Path("docs/elastic_3d_forward_research_zh.md").read_text(encoding="utf-8")
+    assert "小尺度" in text
+    assert "velocity-stress" in text
+    assert "CFL" in text
+    assert "不替代默认绕射扫描定位流程" in text
