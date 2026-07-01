@@ -1,0 +1,69 @@
+# 无空洞演示：用于检查算法在无异常情况下是否出现高置信误报
+
+geometry:
+  road_width: 15.0
+  road_length: 80.0
+  fiber_y: 0.0
+  source_y: null
+  channel_x_min: 0.0
+  channel_x_max: 80.0
+  channel_spacing: 1.0
+  source_x_min: 0.0
+  source_x_max: 80.0
+  source_spacing: 4.0
+  fiber_depth: 0.0
+  source_depth: 0.0
+cavity:
+  enable_cavity: false
+  cavity_x: 42.0
+  cavity_y: 8.5
+  cavity_h: 2.2
+  cavity_radius: 2.0
+  scattering_strength: 1.0
+  attenuation_strength: 0.25
+  tail_strength: 1.0
+  label: "关闭空洞"
+velocity:
+  rayleigh_velocity: 240.0
+  velocity_model_type: "uniform"
+  layer_depths: [0.5, 2.0, 6.0]
+  layer_velocities: [320.0, 260.0, 220.0]
+  source_frequency: 35.0
+  wavelet_type: "ricker"
+  bandpass_freqmin: 10.0
+  bandpass_freqmax: 90.0
+  multi_band: [[20.0, 40.0], [40.0, 80.0], [80.0, 120.0]]
+record:
+  sampling_rate: 1000.0
+  duration: 1.0
+  t0: 0.02
+  stack_count: 1
+  random_seed: 2032
+noise:
+  noise_level: 0.03
+  traffic_noise_level: 0.015
+  bad_channel_fraction: 0.02
+  weak_coupling_fraction: 0.06
+  coupling_variation: 0.08
+  direct_wave_strength: 1.0
+  diffraction_strength: 1.0
+processing:
+  bandpass_freqmin: 10.0
+  bandpass_freqmax: 90.0
+  direct_wave_mute_width: 0.04
+  direct_wave_subtraction_enable: true
+  scan_x_min: 32.0
+  scan_x_max: 52.0
+  scan_x_step: 1.0
+  scan_y_min: 3.0
+  scan_y_max: 14.0
+  scan_y_step: 1.0
+  scan_h_min: 0.8
+  scan_h_max: 4.0
+  scan_h_step: 0.4
+  scan_vr_min: 220.0
+  scan_vr_max: 260.0
+  scan_vr_step: 10.0
+  score_method: "envelope"
+  top_k: 8
+  uncertainty_threshold: 0.92

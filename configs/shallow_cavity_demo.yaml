@@ -1,0 +1,69 @@
+# 浅埋空洞演示：绕射事件可能紧贴直达波，适合使用模板减去
+
+geometry:
+  road_width: 15.0
+  road_length: 80.0
+  fiber_y: 0.0
+  source_y: null
+  channel_x_min: 0.0
+  channel_x_max: 80.0
+  channel_spacing: 1.0
+  source_x_min: 0.0
+  source_x_max: 80.0
+  source_spacing: 4.0
+  fiber_depth: 0.0
+  source_depth: 0.0
+cavity:
+  enable_cavity: true
+  cavity_x: 40.0
+  cavity_y: 8.0
+  cavity_h: 1.0
+  cavity_radius: 1.8
+  scattering_strength: 1.1
+  attenuation_strength: 0.22
+  tail_strength: 0.9
+  label: "浅埋疑似空洞"
+velocity:
+  rayleigh_velocity: 235.0
+  velocity_model_type: "uniform"
+  layer_depths: [0.5, 2.0, 6.0]
+  layer_velocities: [320.0, 260.0, 220.0]
+  source_frequency: 40.0
+  wavelet_type: "ricker"
+  bandpass_freqmin: 12.0
+  bandpass_freqmax: 100.0
+  multi_band: [[20.0, 40.0], [40.0, 80.0], [80.0, 120.0]]
+record:
+  sampling_rate: 1200.0
+  duration: 0.9
+  t0: 0.02
+  stack_count: 1
+  random_seed: 2029
+noise:
+  noise_level: 0.025
+  traffic_noise_level: 0.012
+  bad_channel_fraction: 0.02
+  weak_coupling_fraction: 0.05
+  coupling_variation: 0.08
+  direct_wave_strength: 1.0
+  diffraction_strength: 1.1
+processing:
+  bandpass_freqmin: 12.0
+  bandpass_freqmax: 100.0
+  direct_wave_mute_width: 0.035
+  direct_wave_subtraction_enable: true
+  scan_x_min: 30.0
+  scan_x_max: 50.0
+  scan_x_step: 1.0
+  scan_y_min: 3.0
+  scan_y_max: 14.0
+  scan_y_step: 1.0
+  scan_h_min: 0.4
+  scan_h_max: 3.0
+  scan_h_step: 0.3
+  scan_vr_min: 215.0
+  scan_vr_max: 255.0
+  scan_vr_step: 10.0
+  score_method: "envelope"
+  top_k: 8
+  uncertainty_threshold: 0.92

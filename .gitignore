@@ -1,0 +1,29 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.tmp_test_outputs/
+.vscode/
+
+# 示例输出与临时结果，不随源码提交
+outputs/
+*.gif
+*.mp4
+*.avi
+
+# 真实或大型数据文件
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.segy
+*.sgy
+*.dat
+*.las
+
+# 临时与系统文件
+*.tmp
+.DS_Store
+Thumbs.db

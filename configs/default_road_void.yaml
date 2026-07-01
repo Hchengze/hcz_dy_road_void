@@ -1,0 +1,75 @@
+# 默认道路空洞 DAS 三维正演与定位配置
+# 可直接运行：python main.py tutorial --config configs/default_road_void.yaml
+
+geometry:
+  road_width: 15.0              # 道路宽度 W，也是光纤线到锤击线的横向孔径，单位 m
+  road_length: 80.0             # 沿道路模拟长度，单位 m
+  fiber_y: 0.0                  # DAS 光纤横向位置，默认道路一侧 y=0
+  source_y: null                # null 表示使用 road_width，即锤击线在道路另一侧
+  channel_x_min: 0.0
+  channel_x_max: 80.0
+  channel_spacing: 1.0          # DAS 通道间距，越小接收越密集
+  source_x_min: 0.0
+  source_x_max: 80.0
+  source_spacing: 4.0           # 锤击点间距，越小炮点越密集但外业更慢
+  fiber_depth: 0.0              # 当前原型默认光纤位于地表，可改成浅埋深度
+  source_depth: 0.0             # 锤击震源默认地表
+
+cavity:
+  enable_cavity: true
+  cavity_x: 42.0                # 空洞沿道路位置，主要控制绕射曲线顶点位置
+  cavity_y: 8.5                 # 空洞横向位置，单侧 DAS 下与深度存在耦合
+  cavity_h: 2.2                 # 空洞顶部/主要散射中心深度，单位 m
+  cavity_radius: 2.0
+  scattering_strength: 1.0
+  attenuation_strength: 0.25
+  tail_strength: 1.0
+  label: "疑似空洞"
+
+velocity:
+  rayleigh_velocity: 240.0      # 等效瑞雷波速度，单位 m/s，不等于完整 Vs 剖面
+  velocity_model_type: "uniform" # uniform 用于核心正演；layered 当前主要用于展示
+  layer_depths: [0.5, 2.0, 6.0]
+  layer_velocities: [320.0, 260.0, 220.0]
+  source_frequency: 35.0        # 锤击主频，单位 Hz
+  wavelet_type: "ricker"        # ricker 或 hammer
+  bandpass_freqmin: 10.0
+  bandpass_freqmax: 90.0
+  multi_band: [[20.0, 40.0], [40.0, 80.0], [80.0, 120.0]]
+
+record:
+  sampling_rate: 1000.0         # 采样率，单位 Hz，应明显高于主频两倍
+  duration: 1.0                 # 记录时长，太短会截断绕射/尾波
+  t0: 0.02                      # 触发时间或系统时延，单位 s
+  stack_count: 1                # 预留参数：重复锤击叠加次数
+  random_seed: 2027
+
+noise:
+  noise_level: 0.03             # 随机背景噪声强度
+  traffic_noise_level: 0.015    # 城市交通类低频干扰强度
+  bad_channel_fraction: 0.02
+  weak_coupling_fraction: 0.06
+  coupling_variation: 0.08
+  direct_wave_strength: 1.0
+  diffraction_strength: 1.0
+
+processing:
+  bandpass_freqmin: 10.0
+  bandpass_freqmax: 90.0
+  direct_wave_mute_width: 0.04
+  direct_wave_subtraction_enable: true
+  scan_x_min: 32.0
+  scan_x_max: 52.0
+  scan_x_step: 1.0
+  scan_y_min: 3.0
+  scan_y_max: 14.0
+  scan_y_step: 1.0
+  scan_h_min: 0.8
+  scan_h_max: 4.0
+  scan_h_step: 0.4
+  scan_vr_min: 220.0
+  scan_vr_max: 260.0
+  scan_vr_step: 10.0
+  score_method: "envelope"
+  top_k: 8
+  uncertainty_threshold: 0.92
