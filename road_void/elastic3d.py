@@ -1,10 +1,11 @@
 """小尺度三维弹性波全波形正演原型。
 
 本模块用于研究和教学展示，不是工业级 3D elastic FDTD。实现采用
-三维各向同性 velocity-stress 一阶方程、前/后向配对差分、简化自由
-表面和 sponge 吸收边界。为保持代码短小，变量以同尺寸 NumPy 数组存储；
-它表达 velocity-stress 有限差分的核心物理关系，但不追求高阶严格交错
-网格、CPML、GPU/MPI 或生产级数值精度。
+三维各向同性 velocity-stress 一阶方程、二阶/四阶前后向配对差分、
+简化自由表面和 sponge/experimental-cpml 吸收边界。为保持代码短小，
+变量以同尺寸 NumPy 数组存储；它表达 velocity-stress 有限差分的核心
+物理关系，但当前仍不是严格工业级交错网格、完整 CPML、GPU/MPI 或
+生产级数值精度。
 """
 
 from __future__ import annotations
@@ -37,6 +38,11 @@ class Elastic3DConfig:
     nt: int = 420
     source_frequency: float = 60.0
     source_amplitude: float = 1.0e5
+    vs_scale: float = 1.0
+    space_order: int = 2
+    abc: str = "sponge"
+    record_component: str = "vz"
+    gauge_length: float = 1.0
     sponge_width: int = 6
     sponge_strength: float = 0.018
     free_surface: bool = True
@@ -70,6 +76,7 @@ class Elastic3DResult:
     model: Elastic3DModel
     gather: FloatArray
     receiver_x: FloatArray
+    record_component: str = "vz"
     snapshots: dict[str, FloatArray] = field(default_factory=dict)
     cfl: float = 0.0
 
@@ -83,7 +90,7 @@ def build_elastic3d_model(config: Elastic3DConfig, cavities: list[Cavity] | None
     vs_depth = np.where(z < 1.0, 220.0, np.where(z < 4.0, 320.0, 420.0))
     rho_depth = np.where(z < 1.0, 1800.0, np.where(z < 4.0, 1900.0, 2050.0))
     vp = np.tile(vp_depth[None, None, :], (nx, ny, 1)).astype(float)
-    vs = np.tile(vs_depth[None, None, :], (nx, ny, 1)).astype(float)
+    vs = np.tile((config.vs_scale * vs_depth)[None, None, :], (nx, ny, 1)).astype(float)
     rho = np.tile(rho_depth[None, None, :], (nx, ny, 1)).astype(float)
 
     if config.with_anomaly:
@@ -97,7 +104,26 @@ def build_elastic3d_model(config: Elastic3DConfig, cavities: list[Cavity] | None
 
     mu = rho * vs**2
     lam = rho * vp**2 - 2.0 * mu
-    return Elastic3DModel(vp=vp, vs=vs, rho=rho, lam=lam, mu=mu, dx=config.dx, dy=config.dy, dz=config.dz)
+    model = Elastic3DModel(vp=vp, vs=vs, rho=rho, lam=lam, mu=mu, dx=config.dx, dy=config.dy, dz=config.dz)
+    validate_elastic_model(model)
+    return model
+
+
+def validate_elastic_model(model: Elastic3DModel) -> None:
+    """做最基本的物理 sanity check，避免错误模型静默进入正演。"""
+
+    if not np.all(np.isfinite(model.vp)) or not np.all(np.isfinite(model.vs)) or not np.all(np.isfinite(model.rho)):
+        raise ValueError("elastic3d 模型包含非有限数值。")
+    if np.any(model.vp <= 0) or np.any(model.vs <= 0):
+        raise ValueError("elastic3d 模型速度必须为正。")
+    if np.any(model.rho <= 0):
+        raise ValueError("elastic3d 模型密度必须为正。")
+    if np.any(model.vp <= model.vs):
+        raise ValueError("elastic3d 要求 Vp > Vs > 0。")
+    if np.any(model.mu <= 0):
+        raise ValueError("elastic3d 剪切模量 mu 必须为正。")
+    if np.any(model.lam <= 0):
+        raise ValueError("elastic3d 当前默认模型要求 lambda > 0，请检查 Vp/Vs/rho。")
 
 
 def check_cfl(config: Elastic3DConfig, model: Elastic3DModel, limit: float = 0.45) -> float:
@@ -121,6 +147,7 @@ def run_elastic3d(config: Elastic3DConfig | None = None, cavities: list[Cavity] 
     """运行小尺度三维弹性波 velocity-stress FDTD。"""
 
     cfg = config or Elastic3DConfig()
+    _validate_elastic_config(cfg)
     model = build_elastic3d_model(cfg, cavities)
     cfl = check_cfl(cfg, model)
     nx, ny, nz = cfg.nx, cfg.ny, cfg.nz
@@ -133,7 +160,8 @@ def run_elastic3d(config: Elastic3DConfig | None = None, cavities: list[Cavity] 
     sxy = np.zeros_like(vx)
     sxz = np.zeros_like(vx)
     syz = np.zeros_like(vx)
-    sponge = _sponge_mask(cfg)
+    ux = np.zeros_like(vx) if cfg.record_component == "strain_xx" else None
+    damping = _absorbing_mask(cfg)
 
     src_y = max(cfg.sponge_width + 3, ny - cfg.sponge_width - 3)
     rec_y = min(cfg.sponge_width + 2, ny - cfg.sponge_width - 4)
@@ -151,47 +179,50 @@ def run_elastic3d(config: Elastic3DConfig | None = None, cavities: list[Cavity] 
     source = _ricker_series(cfg.nt, cfg.dt, cfg.source_frequency)
 
     for it in range(cfg.nt):
-        dvx_dx = _ddx_f(vx, cfg.dx)
-        dvy_dy = _ddy_f(vy, cfg.dy)
-        dvz_dz = _ddz_f(vz, cfg.dz)
+        dvx_dx = _ddx_f(vx, cfg.dx, cfg.space_order)
+        dvy_dy = _ddy_f(vy, cfg.dy, cfg.space_order)
+        dvz_dz = _ddz_f(vz, cfg.dz, cfg.space_order)
         sxx += cfg.dt * ((model.lam + 2 * model.mu) * dvx_dx + model.lam * (dvy_dy + dvz_dz))
         syy += cfg.dt * ((model.lam + 2 * model.mu) * dvy_dy + model.lam * (dvx_dx + dvz_dz))
         szz += cfg.dt * ((model.lam + 2 * model.mu) * dvz_dz + model.lam * (dvx_dx + dvy_dy))
-        sxy += cfg.dt * model.mu * (_ddy_f(vx, cfg.dy) + _ddx_f(vy, cfg.dx))
-        sxz += cfg.dt * model.mu * (_ddz_f(vx, cfg.dz) + _ddx_f(vz, cfg.dx))
-        syz += cfg.dt * model.mu * (_ddz_f(vy, cfg.dz) + _ddy_f(vz, cfg.dy))
+        sxy += cfg.dt * model.mu * (_ddy_f(vx, cfg.dy, cfg.space_order) + _ddx_f(vy, cfg.dx, cfg.space_order))
+        sxz += cfg.dt * model.mu * (_ddz_f(vx, cfg.dz, cfg.space_order) + _ddx_f(vz, cfg.dx, cfg.space_order))
+        syz += cfg.dt * model.mu * (_ddz_f(vy, cfg.dz, cfg.space_order) + _ddy_f(vz, cfg.dy, cfg.space_order))
 
         if cfg.free_surface:
             szz[:, :, 0] = 0.0
             sxz[:, :, 0] = 0.0
             syz[:, :, 0] = 0.0
 
-        fx = _ddx_b(sxx, cfg.dx) + _ddy_b(sxy, cfg.dy) + _ddz_b(sxz, cfg.dz)
-        fy = _ddx_b(sxy, cfg.dx) + _ddy_b(syy, cfg.dy) + _ddz_b(syz, cfg.dz)
-        fz = _ddx_b(sxz, cfg.dx) + _ddy_b(syz, cfg.dy) + _ddz_b(szz, cfg.dz)
+        fx = _ddx_b(sxx, cfg.dx, cfg.space_order) + _ddy_b(sxy, cfg.dy, cfg.space_order) + _ddz_b(sxz, cfg.dz, cfg.space_order)
+        fy = _ddx_b(sxy, cfg.dx, cfg.space_order) + _ddy_b(syy, cfg.dy, cfg.space_order) + _ddz_b(syz, cfg.dz, cfg.space_order)
+        fz = _ddx_b(sxz, cfg.dx, cfg.space_order) + _ddy_b(syz, cfg.dy, cfg.space_order) + _ddz_b(szz, cfg.dz, cfg.space_order)
         vx += cfg.dt * fx / model.rho
         vy += cfg.dt * fy / model.rho
         vz += cfg.dt * fz / model.rho
         # 垂向锤击力源。这里加载到速度场，等效于局部竖向脉冲力。
         vz[src] += cfg.dt * cfg.source_amplitude * source[it] / model.rho[src]
 
-        vx *= sponge
-        vy *= sponge
-        vz *= sponge
-        sxx *= sponge
-        syy *= sponge
-        szz *= sponge
-        sxy *= sponge
-        sxz *= sponge
-        syz *= sponge
+        vx *= damping
+        vy *= damping
+        vz *= damping
+        sxx *= damping
+        syy *= damping
+        szz *= damping
+        sxy *= damping
+        sxz *= damping
+        syz *= damping
+        if ux is not None:
+            ux += cfg.dt * vx
+            ux *= damping
 
-        gather[it, :] = vz[rec_x_idx, rec_y, rec_z]
+        gather[it, :] = _record_receivers(cfg, vx, vz, ux, rec_x_idx, rec_y, rec_z)
         for name, step in snapshot_steps.items():
             if it == step:
                 # x-z 剖面，显示通过震源 y 的垂向速度场。
                 snapshots[name] = vz[:, src[1], :].copy()
 
-    return Elastic3DResult(cfg, model, gather, receiver_x, snapshots, cfl)
+    return Elastic3DResult(cfg, model, gather, receiver_x, cfg.record_component, snapshots, cfl)
 
 
 def plot_elastic3d_outputs(
@@ -207,7 +238,10 @@ def plot_elastic3d_outputs(
     _plot_velocity_slice(result, outdir / "velocity_model_slice.png", save, show, dpi)
     for name, snapshot in result.snapshots.items():
         _plot_snapshot(result, snapshot, outdir / f"{name}.png", save, show, dpi)
-    _plot_gather(result, outdir / "elastic3d_gather.png", save, show, dpi)
+    component_output = outdir / f"elastic3d_gather_{result.record_component}.png"
+    _plot_gather(result, component_output, save, show, dpi)
+    if result.record_component == "vz":
+        _plot_gather(result, outdir / "elastic3d_gather.png", save, False, dpi)
 
 
 def animate_elastic3d_wavefield(
@@ -243,6 +277,37 @@ def animate_elastic3d_wavefield(
         plt.show()
     else:
         plt.close(fig)
+
+
+def plot_abc_comparison(
+    config: Elastic3DConfig,
+    outdir: str | Path,
+    save: bool = True,
+    show: bool = False,
+    dpi: int = 180,
+) -> None:
+    """输出 sponge 与 experimental cpml-like 的短时对比图。
+
+    这个函数只用于人工 sanity check：比较两种边界阻尼下接收记录的整体
+    能量随时间变化。它不能证明 CPML 严格正确。
+    """
+
+    short_nt = min(config.nt, 360)
+    base = config.__dict__.copy()
+    base.update({"nt": short_nt, "record_component": "vz"})
+    sponge = run_elastic3d(Elastic3DConfig(**{**base, "abc": "sponge"}))
+    cpml = run_elastic3d(Elastic3DConfig(**{**base, "abc": "cpml"}))
+    t = np.arange(short_nt, dtype=float) * config.dt
+    sponge_energy = np.sqrt(np.mean(sponge.gather**2, axis=1))
+    cpml_energy = np.sqrt(np.mean(cpml.gather**2, axis=1))
+    plt.figure(figsize=(7.4, 4.6))
+    plt.plot(t, sponge_energy, label="sponge")
+    plt.plot(t, cpml_energy, label="experimental cpml-like")
+    plt.xlabel("时间 (s)")
+    plt.ylabel("接收记录 RMS")
+    plt.title("elastic3d 边界吸收 sanity check：sponge vs experimental cpml-like（非严格 CPML 证明）")
+    plt.legend()
+    _finish_elastic_figure(Path(outdir) / "abc_compare_sponge_vs_cpml.png", save, show, dpi)
 
 
 def _coordinate_grids(config: Elastic3DConfig) -> tuple[FloatArray, FloatArray, FloatArray]:
@@ -283,6 +348,38 @@ def _elastic_anomaly_mask(cavity: Cavity, xx: FloatArray, yy: FloatArray, zz: Fl
     return np.zeros_like(xx, dtype=bool)
 
 
+def _validate_elastic_config(config: Elastic3DConfig) -> None:
+    if config.space_order not in {2, 4}:
+        raise ValueError("elastic-space-order 目前只支持 2 或 4。")
+    if config.abc not in {"sponge", "cpml"}:
+        raise ValueError("elastic-abc 目前只支持 sponge 或 cpml。")
+    if config.record_component not in {"vz", "vx", "strain_xx", "strain_rate_xx"}:
+        raise ValueError("elastic-record-component 只能是 vz、vx、strain_xx 或 strain_rate_xx。")
+    if min(config.nx, config.ny, config.nz) < 12:
+        raise ValueError("elastic3d 网格太小，建议每个方向至少 12 个网格。")
+    if config.dx <= 0 or config.dy <= 0 or config.dz <= 0 or config.dt <= 0:
+        raise ValueError("dx/dy/dz/dt 必须为正。")
+    if config.vs_scale <= 0:
+        raise ValueError("vs_scale 必须为正。")
+    if config.gauge_length <= 0:
+        raise ValueError("elastic-gauge-length 必须为正。")
+    if config.source_amplitude <= 0:
+        raise ValueError("震源幅值必须为正，过大可能导致数值饱和。")
+
+
+def _absorbing_mask(config: Elastic3DConfig) -> FloatArray:
+    """返回边界阻尼因子。
+
+    ``sponge`` 是简单指数海绵层。``cpml`` 当前是 experimental CPML-like
+    多项式阻尼，只模仿 PML 中“边界阻尼随深度增强”的思想，没有实现完整
+    CPML 辅助记忆变量，因此文档和控制台都必须称为实验选项。
+    """
+
+    if config.abc == "cpml":
+        return _cpml_like_mask(config)
+    return _sponge_mask(config)
+
+
 def _sponge_mask(config: Elastic3DConfig) -> FloatArray:
     mask = np.ones((config.nx, config.ny, config.nz), dtype=float)
     width = max(int(config.sponge_width), 1)
@@ -300,40 +397,107 @@ def _sponge_mask(config: Elastic3DConfig) -> FloatArray:
     return mask
 
 
-def _ddx_f(a: FloatArray, dx: float) -> FloatArray:
-    out = np.zeros_like(a)
-    out[:-1, :, :] = (a[1:, :, :] - a[:-1, :, :]) / dx
-    return out
+def _cpml_like_mask(config: Elastic3DConfig) -> FloatArray:
+    mask = np.ones((config.nx, config.ny, config.nz), dtype=float)
+    width = max(int(config.sponge_width), 1)
+    vmax_hint = 900.0
+    sigma_max = 3.0 * vmax_hint * np.log(1000.0) / max(width * min(config.dx, config.dy, config.dz), 1e-6)
+    for axis, n in enumerate((config.nx, config.ny, config.nz)):
+        idx = np.arange(n, dtype=float)
+        dist = np.minimum(idx, n - 1 - idx)
+        if axis == 2 and config.free_surface:
+            dist = np.minimum(n - 1 - idx, width)
+        sigma = np.zeros(n, dtype=float)
+        edge = dist < width
+        sigma[edge] = sigma_max * ((width - dist[edge]) / width) ** 2
+        damp_1d = np.exp(-sigma * config.dt)
+        shape = [1, 1, 1]
+        shape[axis] = n
+        mask *= damp_1d.reshape(shape)
+    return mask
 
 
-def _ddy_f(a: FloatArray, dy: float) -> FloatArray:
-    out = np.zeros_like(a)
-    out[:, :-1, :] = (a[:, 1:, :] - a[:, :-1, :]) / dy
-    return out
+def _record_receivers(
+    config: Elastic3DConfig,
+    vx: FloatArray,
+    vz: FloatArray,
+    ux: FloatArray | None,
+    rec_x_idx: NDArray[np.integer],
+    rec_y: int,
+    rec_z: int,
+) -> FloatArray:
+    """记录检波器/DAS 近似响应。
+
+    ``vz`` 和 ``vx`` 是普通速度分量；``strain_rate_xx`` 用
+    ``dvx/dx`` 近似沿 x 方向光纤的 DAS 应变率；``strain_xx`` 用积分位移
+    ``ux`` 做有限 gauge length 差分。真实 DAS 还受光纤方向、gauge length、
+    耦合和解调方式影响，这里只是数值原型。
+    """
+
+    if config.record_component == "vz":
+        return vz[rec_x_idx, rec_y, rec_z]
+    if config.record_component == "vx":
+        return vx[rec_x_idx, rec_y, rec_z]
+    field = vx if config.record_component == "strain_rate_xx" else ux
+    if field is None:
+        raise ValueError("strain_xx 记录需要位移积分场 ux。")
+    half = max(1, int(round(0.5 * config.gauge_length / config.dx)))
+    left = np.clip(rec_x_idx - half, 0, config.nx - 1)
+    right = np.clip(rec_x_idx + half, 0, config.nx - 1)
+    length = np.maximum((right - left) * config.dx, config.dx)
+    return (field[right, rec_y, rec_z] - field[left, rec_y, rec_z]) / length
 
 
-def _ddz_f(a: FloatArray, dz: float) -> FloatArray:
-    out = np.zeros_like(a)
-    out[:, :, :-1] = (a[:, :, 1:] - a[:, :, :-1]) / dz
-    return out
+def _ddx_f(a: FloatArray, dx: float, order: int = 2) -> FloatArray:
+    return _diff_forward(a, dx, axis=0, order=order)
 
 
-def _ddx_b(a: FloatArray, dx: float) -> FloatArray:
-    out = np.zeros_like(a)
-    out[1:, :, :] = (a[1:, :, :] - a[:-1, :, :]) / dx
-    return out
+def _ddy_f(a: FloatArray, dy: float, order: int = 2) -> FloatArray:
+    return _diff_forward(a, dy, axis=1, order=order)
 
 
-def _ddy_b(a: FloatArray, dy: float) -> FloatArray:
-    out = np.zeros_like(a)
-    out[:, 1:, :] = (a[:, 1:, :] - a[:, :-1, :]) / dy
-    return out
+def _ddz_f(a: FloatArray, dz: float, order: int = 2) -> FloatArray:
+    return _diff_forward(a, dz, axis=2, order=order)
 
 
-def _ddz_b(a: FloatArray, dz: float) -> FloatArray:
-    out = np.zeros_like(a)
-    out[:, :, 1:] = (a[:, :, 1:] - a[:, :, :-1]) / dz
-    return out
+def _ddx_b(a: FloatArray, dx: float, order: int = 2) -> FloatArray:
+    return _diff_backward(a, dx, axis=0, order=order)
+
+
+def _ddy_b(a: FloatArray, dy: float, order: int = 2) -> FloatArray:
+    return _diff_backward(a, dy, axis=1, order=order)
+
+
+def _ddz_b(a: FloatArray, dz: float, order: int = 2) -> FloatArray:
+    return _diff_backward(a, dz, axis=2, order=order)
+
+
+def _diff_forward(a: FloatArray, spacing: float, axis: int, order: int) -> FloatArray:
+    """前向导数。
+
+    二阶模板为 ``f[i+1]-f[i]``。四阶模板使用常见交错差分系数：
+    ``9/8*(f[i+1]-f[i]) - 1/24*(f[i+2]-f[i-1])``，边界附近自动退回二阶。
+    当前变量仍以同尺寸数组存储，因此这是“交错模板风格”的近似，而不是
+    严格变量错位存储。
+    """
+
+    moved = np.moveaxis(a, axis, 0)
+    out = np.zeros_like(moved)
+    out[:-1] = (moved[1:] - moved[:-1]) / spacing
+    if order == 4 and moved.shape[0] >= 4:
+        out[1:-2] = ((9.0 / 8.0) * (moved[2:-1] - moved[1:-2]) - (1.0 / 24.0) * (moved[3:] - moved[:-3])) / spacing
+    return np.moveaxis(out, 0, axis)
+
+
+def _diff_backward(a: FloatArray, spacing: float, axis: int, order: int) -> FloatArray:
+    """后向导数，四阶时与前向模板配对。"""
+
+    moved = np.moveaxis(a, axis, 0)
+    out = np.zeros_like(moved)
+    out[1:] = (moved[1:] - moved[:-1]) / spacing
+    if order == 4 and moved.shape[0] >= 4:
+        out[2:-1] = ((9.0 / 8.0) * (moved[2:-1] - moved[1:-2]) - (1.0 / 24.0) * (moved[3:] - moved[:-3])) / spacing
+    return np.moveaxis(out, 0, axis)
 
 
 def _ricker_series(nt: int, dt: float, frequency: float) -> FloatArray:
@@ -372,11 +536,21 @@ def _plot_gather(result: Elastic3DResult, output: Path, save: bool, show: bool, 
     vmax = max(float(np.max(np.abs(result.gather))), 1e-12)
     plt.figure(figsize=(8.2, 4.8))
     plt.imshow(result.gather, origin="upper", aspect="auto", extent=[result.receiver_x[0], result.receiver_x[-1], cfg.nt * cfg.dt, 0], cmap="seismic", vmin=-vmax, vmax=vmax)
-    plt.colorbar(label="vz (m/s)")
+    label = _component_label(result.record_component)
+    plt.colorbar(label=label)
     plt.xlabel("接收线 x (m)")
     plt.ylabel("时间 (s)")
-    plt.title("三维弹性波全波形有限差分原型，小尺度教学/研究模型：接收记录")
+    plt.title(f"三维弹性波全波形有限差分原型，小尺度教学/研究模型：{result.record_component} 接收记录")
     _finish_elastic_figure(output, save, show, dpi)
+
+
+def _component_label(component: str) -> str:
+    return {
+        "vz": "vz (m/s)",
+        "vx": "vx (m/s)",
+        "strain_rate_xx": "近似 DAS strain_rate_xx (1/s)",
+        "strain_xx": "近似 DAS strain_xx",
+    }.get(component, component)
 
 
 def _finish_elastic_figure(output: Path, save: bool, show: bool, dpi: int) -> None:

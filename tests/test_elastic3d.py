@@ -9,6 +9,7 @@ import pytest
 
 from road_void.anomaly import Cavity
 from road_void.elastic3d import Elastic3DConfig, build_elastic3d_model, check_cfl, run_elastic3d
+from road_void.fwi import run_fwi_misfit_demo
 
 
 def test_elastic3d_builds_small_model_and_cfl_is_stable():
@@ -33,6 +34,29 @@ def test_elastic3d_runs_and_returns_gather_shape():
     assert result.gather.shape[1] > 0
     assert result.cfl > 0
     assert result.snapshots
+
+
+def test_elastic3d_space_order_2_and_4_run():
+    cfg2 = Elastic3DConfig(nx=24, ny=20, nz=16, nt=30, space_order=2)
+    cfg4 = Elastic3DConfig(nx=24, ny=20, nz=16, nt=30, space_order=4)
+    r2 = run_elastic3d(cfg2)
+    r4 = run_elastic3d(cfg4)
+    assert r2.gather.shape == r4.gather.shape
+    assert not np.allclose(r2.gather, r4.gather)
+
+
+def test_elastic3d_sponge_and_cpml_modes_run():
+    sponge = run_elastic3d(Elastic3DConfig(nx=24, ny=20, nz=16, nt=30, abc="sponge"))
+    cpml = run_elastic3d(Elastic3DConfig(nx=24, ny=20, nz=16, nt=30, abc="cpml"))
+    assert sponge.gather.shape == cpml.gather.shape
+    assert np.isfinite(cpml.gather).all()
+
+
+def test_elastic3d_vz_and_strain_rate_records_differ():
+    vz = run_elastic3d(Elastic3DConfig(nx=24, ny=20, nz=16, nt=40, record_component="vz"))
+    strain_rate = run_elastic3d(Elastic3DConfig(nx=24, ny=20, nz=16, nt=40, record_component="strain_rate_xx"))
+    assert vz.gather.shape == strain_rate.gather.shape
+    assert not np.allclose(vz.gather, strain_rate.gather)
 
 
 def test_elastic3d_anomaly_changes_model_and_output():
@@ -68,3 +92,40 @@ def test_main_elastic3d_tiny_cli_runs():
         env=env,
     )
     assert "CFL number" in completed.stdout
+
+
+def test_main_elastic3d_strain_rate_cli_runs():
+    env = os.environ.copy()
+    env.setdefault("MPLBACKEND", "Agg")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "main.py",
+            "elastic3d",
+            "--elastic-record-component",
+            "strain_rate_xx",
+            "--elastic-nt",
+            "20",
+            "--nx",
+            "24",
+            "--ny",
+            "20",
+            "--nz",
+            "16",
+            "--no-save",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert "record_component = strain_rate_xx" in completed.stdout
+
+
+def test_fwi_demo_misfit_curve_runs():
+    result = run_fwi_misfit_demo(
+        vs_scales=(0.9, 1.0),
+        config=Elastic3DConfig(nx=22, ny=18, nz=14, nt=24, record_component="strain_rate_xx"),
+    )
+    assert result.misfits.shape == (2,)
+    assert result.best_vs_scale in {0.9, 1.0}

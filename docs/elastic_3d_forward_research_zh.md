@@ -58,7 +58,18 @@ d syz/dt = mu (d vy/dz + d vz/dy)
 
 经典弹性波有限差分常使用 velocity-stress 交错网格。Virieux (1986) 的 P-SV velocity-stress 有限差分是这一类方法的重要基础；后续三维 staggered-grid elastic FD 工作把同样思想扩展到更多变量和更高阶差分。
 
-本项目为了保持代码短小，采用同尺寸 NumPy 数组保存所有变量，并使用前/后向配对差分避免简单中心差分带来的奇偶网格解耦。它表达一阶弹性波方程的核心变量关系，但不是严格高阶交错网格，也不追求工业模拟精度。
+本项目为了保持代码短小，采用同尺寸 NumPy 数组保存所有变量，并使用前/后向配对差分避免简单中心差分带来的奇偶网格解耦。它表达一阶弹性波方程的核心变量关系，但不是严格变量错位存储的工业级交错网格，也不追求工业模拟精度。
+
+当前支持：
+
+- `elastic-space-order=2`：二阶前/后向配对差分；
+- `elastic-space-order=4`：四阶交错模板风格差分，内部使用
+
+```text
+df/dx ≈ [9/8 * (f[i+1]-f[i]) - 1/24 * (f[i+2]-f[i-1])] / dx
+```
+
+边界附近自动退回二阶。四阶通常可以降低内部数值频散，但小网格、边界和强非均匀模型下仍需人工检查波场图。
 
 ## 4. 自由表面与吸收边界
 
@@ -70,7 +81,9 @@ szz = sxz = syz = 0
 
 这只是一个教学级自由表面近似。真实高精度弹性波自由表面需要更严格的边界处理。
 
-外边界使用 sponge 吸收层：在靠近边界的若干网格内逐步衰减速度和应力，降低边界反射。CPML/PML 吸收边界通常效果更好，但实现复杂度更高，本阶段暂不加入。
+外边界默认使用 sponge 吸收层：在靠近边界的若干网格内逐步衰减速度和应力，降低边界反射。
+
+当前还提供 `elastic-abc=cpml` 选项，但它只是 experimental CPML-like 阻尼：使用类似 PML 的多项式阻尼剖面衰减边界区域，没有实现完整 CPML 所需的辅助记忆变量和严格 split/unsplit 更新。因此它只能用于对比和教学，不应称为完整 CPML。若保存图件，会输出 `abc_compare_sponge_vs_cpml.png` 作为边界吸收 sanity check。
 
 ## 5. CFL 稳定性
 
@@ -90,9 +103,14 @@ CFL < 0.45
 
 ## 6. 震源与接收
 
-当前震源为浅层垂向 Ricker 脉冲，加载到 `vz` 速度场上，用于近似锤击垂向力。接收线记录浅层 `vz` 分量，作为简化 DAS/检波器响应。
+当前震源为浅层垂向 Ricker 脉冲，加载到 `vz` 速度场上，用于近似锤击垂向力。接收线可记录：
 
-真实 DAS 记录的是沿光纤方向的应变或应变率平均，与 `vz` 并不等同。后续若要更接近真实 DAS，需要把位移/速度场转换为沿光纤方向应变，并考虑 gauge length。
+- `vz`：垂向速度；
+- `vx`：沿 x 方向速度；
+- `strain_rate_xx`：用 `dvx/dx` 近似沿 x 方向光纤 DAS 应变率；
+- `strain_xx`：对 `vx` 时间积分得到近似 `ux` 后，用有限 gauge length 差分近似应变。
+
+真实 DAS 记录的是沿光纤方向的应变或应变率平均，与 `vz` 并不等同。当前 `strain_rate_xx` 假设光纤沿 x 方向，且只做有限长度差分，不包含光纤-土体耦合、解调仪器响应和复杂路径方向变化。
 
 ## 7. 与默认运动学正演的区别
 
@@ -122,6 +140,9 @@ CFL < 0.45
 - 简化自由表面；
 - sponge 吸收边界；
 - CFL 检查；
+- 二阶/四阶差分选项；
+- sponge 和 experimental cpml-like 边界选项；
+- `vz/vx/strain_xx/strain_rate_xx` 记录分量；
 - 速度切片、波场快照、接收记录和可选 GIF。
 
 当前不做：
@@ -130,12 +151,23 @@ CFL < 0.45
 - 大规模道路模型；
 - 高阶严格交错网格；
 - CPML；
+- 严格带记忆变量的完整 CPML；
 - 各向异性；
 - 黏弹性；
-- FWI/RTM；
+- 完整伴随 FWI/RTM；
 - 生产级数据格式。
 
-## 9. 参考资料
+## 9. FWI 最小原型
+
+`python main.py fwi-demo` 是一个最小 FWI 方向演示，但不是完整 FWI。它固定模型几何，只改变一个标量 `Vs` 缩放因子，重复调用 `elastic3d` 正演，计算：
+
+```text
+J(m) = 0.5 * ||d_cal(m) - d_obs||^2
+```
+
+输出 `misfit_curve.png` 和 `observed_vs_synthetic_gather.png`。当前没有伴随方程、梯度、步长搜索和模型更新，因此只能称为 FWI-demo 或误差函数实验。
+
+## 10. 参考资料
 
 - Virieux, J. (1986). P-SV wave propagation in heterogeneous media: velocity-stress finite-difference method.
 - Devito 相关工作展示了用 DSL 构造有限差分 PDE 求解器和弹性波方程示例：[Devito v3.1.0](https://arxiv.org/abs/1808.01995)、[Vectorial simulations using Devito](https://arxiv.org/abs/2004.10519)。

@@ -8,7 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
-from main import build_parser, config_from_args
+import main
+from main import build_args_from_local_config, build_parser, config_from_args
 from road_void.workflow import simulate_from_config
 
 
@@ -34,6 +35,24 @@ def test_main_without_subcommand_runs_default_workflow():
     assert "workflow" in completed.stdout
     assert "Step 1" in completed.stdout
     assert "Step 7" in completed.stdout
+
+
+def test_local_debug_config_builds_workflow_args():
+    args = build_args_from_local_config("workflow")
+    assert args.command == "workflow"
+    assert hasattr(args, "road_width")
+
+
+def test_local_debug_config_builds_scan_args():
+    args = build_args_from_local_config("scan")
+    assert args.command == "scan"
+    assert args.scan_mode == main.LOCAL_SCAN_PARAMS["scan_mode"]
+
+
+def test_local_debug_config_builds_elastic3d_args():
+    args = build_args_from_local_config("elastic3d")
+    assert args.command == "elastic3d"
+    assert args.elastic_space_order == main.LOCAL_ELASTIC3D_PARAMS["elastic_space_order"]
 
 
 def test_main_workflow_no_save_runs():
@@ -194,7 +213,8 @@ def test_minimal_examples_run():
 
 def test_readme_no_longer_recommends_config_as_main_entry():
     text = Path("README.md").read_text(encoding="utf-8")
-    assert "日常使用优先直接运行完整 workflow" in text
+    assert "VSCode" in text
+    assert "USE_LOCAL_DEBUG_CONFIG" in text
     assert "python main.py\n" in text
     assert "python main.py workflow" in text
     assert "历史兼容" in text

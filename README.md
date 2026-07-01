@@ -11,16 +11,34 @@
 
 ## 推荐入口
 
-日常使用优先直接运行完整 workflow：
+如果在 VSCode 中本地调试，推荐直接打开 [main.py](main.py)，修改顶部“本地调试配置区”的 `LOCAL_RUN_MODE` 和 `LOCAL_*_PARAMS`，然后点击 Run Python File：
 
 ```bash
 python main.py
 ```
 
-这等价于：
+当 `USE_LOCAL_DEBUG_CONFIG=True` 且没有输入命令行子命令时，`python main.py` 会读取本地调试配置。例如：
+
+```python
+LOCAL_RUN_MODE = "elastic3d"
+LOCAL_SHOW = True
+LOCAL_SAVE = False
+
+LOCAL_ELASTIC3D_PARAMS = dict(
+    elastic_space_order=4,
+    elastic_abc="sponge",
+    elastic_record_component="strain_rate_xx",
+    elastic_gauge_length=1.0,
+)
+```
+
+这种方式只是为了本地算法调试方便，不是 YAML 或软件包配置系统。
+
+如果显式输入子命令，仍然按 argparse 命令行运行：
 
 ```bash
 python main.py workflow
+python main.py scan --road-width 30 --cavity-depth 2.5 --no-save
 ```
 
 `workflow` 会按“建模几何 -> 速度/频率说明 -> 正演 -> 路径公式 -> 绕射扫描 -> 结果解释”的算法顺序执行一遍，并且在同一上下文中只正演一次、扫描一次，避免重复生成大量图件。
@@ -54,6 +72,7 @@ python main.py tutorial --save
 - `sensitivity`：做参数敏感性分析，输出少量趋势图和 CSV。
 - `tutorial`：生成一套不重复的教学流程图。
 - `elastic3d`：运行小尺度三维弹性波全波形有限差分原型，输出速度切片、波场快照和接收记录。
+- `fwi-demo`：运行一维 `Vs` 缩放 L2 misfit 曲线演示，不是完整伴随 FWI。
 - `workflow`：默认完整流程入口，控制台按算法步骤解释，输出一套代表性图件。
 - `all`：当前作为 `workflow` 的别名，保留给习惯使用 `all` 的场景；日常推荐使用 `workflow` 或直接 `python main.py`。
 
@@ -202,6 +221,9 @@ python main.py workflow --anomalies "sphere:42,8.5,2.2,2.0,1.0;box:58,6,1.5,4,3,
 python main.py elastic3d --no-save
 python main.py elastic3d --save
 python main.py elastic3d --animate --save
+python main.py elastic3d --elastic-space-order 4 --no-save
+python main.py elastic3d --elastic-record-component strain_rate_xx --no-save
+python main.py elastic3d --elastic-abc cpml --no-save
 ```
 
 默认输出：
@@ -217,7 +239,36 @@ outputs/elastic3d/elastic3d_wavefield.gif  # 仅 --animate --save 时生成
 
 它实现的是小尺度三维各向同性 velocity-stress 有限差分原型，变量包括 `vx/vy/vz` 和 `sxx/syy/szz/sxy/sxz/syz`，模型参数包括 `Vp/Vs/rho/lambda/mu`。它会做 CFL 稳定性检查，并使用简化自由表面和 sponge 吸收边界。
 
+当前 elastic3d 增强项：
+
+- `--elastic-space-order 2/4`：二阶或四阶前/后向配对差分；四阶使用 `9/8` 与 `-1/24` 的交错模板系数，但变量仍同尺寸存储，因此不是严格工业级交错网格。
+- `--elastic-abc sponge/cpml`：`sponge` 为默认稳定海绵层；`cpml` 是 experimental CPML-like 多项式阻尼，没有完整辅助记忆变量，不能称为严格 CPML。
+- `--elastic-record-component vz/vx/strain_xx/strain_rate_xx`：`strain_rate_xx≈dvx/dx` 用于近似沿 x 方向光纤 DAS 应变率响应。
+- `--elastic-gauge-length`：用于 DAS 近似记录的有限长度差分。真实 DAS 还受光纤走向、gauge length、耦合和解调方式影响。
+
 注意：`elastic3d` 默认模型尺寸很小，坐标范围与道路 workflow 不完全相同；如果显式传入 `--anomalies`，请确保异常体坐标落在小模型范围内。当前 elastic3d 还不作为扫描定位输入，只用于小模型波场现象验证。
+
+## FWI 最小原型
+
+```bash
+python main.py fwi-demo --no-save
+python main.py fwi-demo --save
+```
+
+当前 `fwi-demo` 只做一件事：改变一个标量 `Vs` 缩放因子，反复调用小尺度 `elastic3d` 正演，并计算：
+
+```text
+J(m) = 0.5 * ||d_cal(m) - d_obs||^2
+```
+
+输出：
+
+```text
+outputs/fwi/misfit_curve.png
+outputs/fwi/observed_vs_synthetic_gather.png
+```
+
+它没有实现伴随方程、梯度、步长搜索或模型更新，因此不能称为完整三维弹性 FWI。
 
 参数含义详见：
 
@@ -299,5 +350,6 @@ python -m pytest -q
 
 - workflow 中的波场 GIF 是等效运动学传播示意，不是高保真弹性波场快照。
 - `layered-effective` 已经让层状速度通过 `VR_eff` 影响运动学正演和扫描，但仍不是完整频散反演。
-- `elastic3d` 更接近真实波场，但目前只是小尺度教学/研究模型，不替代默认定位算法。
+- `elastic3d` 更接近真实波场，但目前只是小尺度教学/研究模型，不替代默认定位算法；当前四阶差分、cpml-like 边界和 DAS 应变率记录都属于研究原型。
+- `fwi-demo` 只是 misfit 曲线演示，不是完整 FWI。
 - 后续建议扩展：多频带速度约束、FK/扇形滤波、预测滤波绕射增强、从 elastic3d 波场中提取绕射事件、真实 DAS 触发校正、光纤路径标定和通道耦合 QC。

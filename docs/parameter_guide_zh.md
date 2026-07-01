@@ -153,6 +153,10 @@ python main.py elastic3d --animate --save
 - `--elastic-nt`：时间步数。越大传播时间越长，计算越慢；
 - `--elastic-source-frequency`：Ricker 震源主频，单位 Hz；
 - `--elastic-source-amplitude`：垂向力源幅度；
+- `--elastic-space-order`：空间差分阶数，支持 2 和 4。四阶使用 `9/8` 与 `-1/24` 的交错模板风格差分，内部数值频散更低，但边界仍会降阶；
+- `--elastic-abc`：吸收边界，`sponge` 为默认稳定海绵层，`cpml` 当前为 experimental CPML-like 阻尼，不是完整 CPML；
+- `--elastic-record-component`：接收记录分量，支持 `vz`、`vx`、`strain_xx`、`strain_rate_xx`；
+- `--elastic-gauge-length`：近似 DAS gauge length，单位 m，用于沿 x 方向应变/应变率差分；
 - `--elastic-no-anomaly`：关闭低速低密度异常体，用于和有异常模型对比。
 
 CFL 检查公式为：
@@ -164,6 +168,22 @@ CFL = vmax * dt * sqrt(1/dx^2 + 1/dy^2 + 1/dz^2)
 当前要求 `CFL < 0.45`。如果参数不稳定，程序会报错，而不是输出可能误导的波场图。
 
 注意：elastic3d 默认坐标范围是小模型范围，不等同于道路 workflow 的 80 m 沿线范围。如果给 `elastic3d` 显式传入 `--anomalies`，异常体坐标必须落在这个小模型范围内才会影响波场。
+
+## FWI-demo 参数
+
+`fwi-demo` 当前只是误差函数演示，不是完整 FWI：
+
+- `--fwi-vs-scales`：候选 `Vs` 缩放因子列表；
+- `--fwi-observed-vs-scale`：生成目标数据的 `Vs` 缩放；
+- `--fwi-initial-vs-scale`：绘制目标/初始合成记录对比时使用的初始 `Vs` 缩放。
+
+误差函数为：
+
+```text
+J(m) = 0.5 * ||d_cal(m) - d_obs||^2
+```
+
+当前没有伴随梯度、步长搜索或模型更新。
 
 ## 常见错误设置
 

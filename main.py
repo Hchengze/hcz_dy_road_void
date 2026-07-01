@@ -19,7 +19,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from road_void.config import CavityConfig, GeometryConfig, NoiseConfig, ProcessingConfig, RecordConfig, RoadVoidConfig, VelocityConfig
-from road_void.elastic3d import Elastic3DConfig, animate_elastic3d_wavefield, plot_elastic3d_outputs, run_elastic3d
+from road_void.elastic3d import Elastic3DConfig, animate_elastic3d_wavefield, plot_abc_comparison, plot_elastic3d_outputs, run_elastic3d
+from road_void.fwi import plot_fwi_demo_outputs, run_fwi_misfit_demo
 from road_void.visualization import (
     animate_kinematic_wavefield,
     plot_kinematic_wavefield_frames,
@@ -34,6 +35,109 @@ from road_void.visualization import (
 from road_void.workflow import run_location_workflow, simulate_from_config
 
 
+# ============================================================
+# 本地调试配置区：适合在 VSCode 中直接点击运行 main.py
+# ============================================================
+#
+# 使用规则：
+# 1. 直接运行 ``python main.py`` 且 USE_LOCAL_DEBUG_CONFIG=True 时，会读取
+#    LOCAL_RUN_MODE 和下面这些 LOCAL_* 参数。
+# 2. 如果显式输入命令行子命令，例如 ``python main.py scan --no-save``，
+#    则优先使用 argparse 命令行参数，不受这里影响。
+# 3. 这里不是新的配置系统，只是为了本地算法研究时少敲命令行。
+
+USE_LOCAL_DEBUG_CONFIG = True
+
+# 可选模式："workflow", "geometry", "forward", "velocity", "wavefield",
+# "path", "scan", "sensitivity", "tutorial", "elastic3d", "fwi-demo", "all"。
+LOCAL_RUN_MODE = "workflow"
+
+# 输出控制。VSCode 中想弹窗看图可把 LOCAL_SHOW 改为 True；批量烟测建议 False。
+LOCAL_SHOW = False
+LOCAL_SAVE = False
+LOCAL_ANIMATE = False
+LOCAL_OUTDIR = "outputs/local_debug"
+LOCAL_DPI = 150
+
+LOCAL_GEOMETRY_PARAMS = dict(
+    road_width=15.0,       # 道路横向宽度 W，单位 m；控制锤击线到光纤线的横向孔径。
+    road_length=80.0,      # 沿道路模拟长度，单位 m；需覆盖通道、炮点和异常体。
+    channel_spacing=1.0,   # DAS 通道间距，单位 m；越小沿 x 采样越密。
+    source_spacing=4.0,    # 锤击点距，单位 m；越小多炮约束越强但采集工作量越大。
+)
+
+LOCAL_VELOCITY_PARAMS = dict(
+    rayleigh_velocity=240.0,          # 等效瑞雷波速度 VR，单位 m/s。
+    source_frequency=35.0,            # 锤击主频 f，单位 Hz；lambda=VR/f。
+    velocity_mode="uniform",          # "uniform" 或 "layered-effective"。
+    layer_depths="0.4,1.5,4.0",       # 层底深度，单位 m；layered-effective 使用。
+    layer_velocities="180,240,320",   # 每层等效瑞雷速度，单位 m/s。
+    sensitivity_depth_factor=0.5,     # z_sensitive≈alpha*lambda。
+)
+
+LOCAL_ANOMALY_PARAMS = dict(
+    cavity_x=42.0,
+    cavity_y=8.5,
+    cavity_depth=2.2,
+    cavity_radius=2.0,
+    cavity_shape="sphere",
+    scattering_strength=1.0,
+    attenuation_strength=0.25,
+    # 多异常体格式示例：
+    # "sphere:42,8.5,2.2,2.0,1.0;box:58,6,1.5,4,3,1,0.8"
+    anomalies="",
+)
+
+LOCAL_NOISE_PARAMS = dict(
+    noise_level=0.03,
+    traffic_noise_level=0.015,
+    bad_channel_fraction=0.02,
+    weak_coupling_fraction=0.06,
+    coupling_variation=0.08,
+)
+
+LOCAL_SCAN_PARAMS = dict(
+    scan_mode="joint",          # "joint", "single-shot", "compare"。
+    shot_index=5,               # single-shot 模式使用的炮号。
+    shot_weight_mode="uniform", # "uniform", "near-cavity", "snr"。
+    scan_x_min=32.0,
+    scan_x_max=52.0,
+    scan_x_step=1.0,
+    scan_y_min=3.0,
+    scan_y_max=14.0,
+    scan_y_step=1.0,
+    scan_h_min=0.8,
+    scan_h_max=4.0,
+    scan_h_step=0.4,
+    scan_vr_min=220.0,
+    scan_vr_max=260.0,
+    scan_vr_step=10.0,
+)
+
+LOCAL_ELASTIC3D_PARAMS = dict(
+    nx=56,
+    ny=36,
+    nz=28,
+    dx=0.5,
+    dy=0.5,
+    dz=0.5,
+    elastic_dt=0.00012,
+    elastic_nt=420,
+    elastic_source_frequency=60.0,
+    elastic_source_amplitude=1.0e5,
+    elastic_space_order=2,             # 2 或 4；四阶更低数值频散但边界仍降阶。
+    elastic_abc="sponge",              # "sponge" 或 "cpml"；cpml 当前为 experimental cpml-like。
+    elastic_record_component="vz",     # "vz", "vx", "strain_xx", "strain_rate_xx"。
+    elastic_gauge_length=1.0,           # DAS 近似 gauge length，单位 m。
+)
+
+LOCAL_FWI_PARAMS = dict(
+    fwi_vs_scales="0.86,0.92,0.98,1.0,1.04",
+    fwi_observed_vs_scale=1.0,
+    fwi_initial_vs_scale=0.9,
+)
+
+
 WORKFLOW_STEPS = [
     ("geometry", "建立道路三维几何：道路、光纤、炮线、空洞"),
     ("velocity", "展示等效瑞雷波速度/速度模型，并说明 lambda = VR / f"),
@@ -43,6 +147,79 @@ WORKFLOW_STEPS = [
     ("wavefield", "可选生成等效运动学波场动画，不作为高保真弹性波场"),
     ("summary", "输出结果解释、受限孔径提醒和参数记录"),
 ]
+
+
+def build_args_from_local_config(run_mode: str | None = None) -> argparse.Namespace:
+    """把 ``LOCAL_*`` 本地调试参数转换为 argparse Namespace。
+
+    这样 VSCode 直接运行和命令行运行复用同一个 parser、同一批 ``run_xxx``
+    函数，避免维护两套入口逻辑。
+    """
+
+    mode = run_mode or LOCAL_RUN_MODE
+    argv = _local_config_to_argv(mode)
+    return build_parser().parse_args(argv)
+
+
+def _local_config_to_argv(mode: str) -> list[str]:
+    params: dict[str, object] = {}
+    params.update(LOCAL_GEOMETRY_PARAMS)
+    params.update(LOCAL_VELOCITY_PARAMS)
+    params.update(LOCAL_ANOMALY_PARAMS)
+    params.update(LOCAL_NOISE_PARAMS)
+    if mode in {"workflow", "scan", "sensitivity", "tutorial", "all"}:
+        params.update(LOCAL_SCAN_PARAMS)
+    if mode == "elastic3d":
+        params.update(LOCAL_ELASTIC3D_PARAMS)
+    if mode == "fwi-demo":
+        params.update(LOCAL_ELASTIC3D_PARAMS)
+        params.update(LOCAL_FWI_PARAMS)
+
+    argv = [mode]
+    for key, value in params.items():
+        if value is None or value == "":
+            continue
+        flag = "--" + key.replace("_", "-")
+        if isinstance(value, bool):
+            if value:
+                argv.append(flag)
+        else:
+            argv.extend([flag, str(value)])
+    if LOCAL_SAVE:
+        argv.append("--save")
+    else:
+        argv.append("--no-save")
+    if LOCAL_SHOW:
+        argv.append("--show")
+    else:
+        argv.append("--no-show")
+    if LOCAL_ANIMATE and mode in {"workflow", "wavefield", "tutorial", "elastic3d", "all"}:
+        argv.append("--animate")
+    argv.extend(["--outdir", LOCAL_OUTDIR, "--dpi", str(LOCAL_DPI)])
+    return argv
+
+
+def print_local_run_summary(args: argparse.Namespace) -> None:
+    """在 VSCode 输出窗口打印当前本地运行模式和关键参数。"""
+
+    print("=" * 64)
+    print("VSCode/本地调试模式")
+    print(f"当前运行模式：{args.command}")
+    print(f"输出模式：show={bool(args.show)}, save={bool(args.save) and not bool(args.no_save)}, animate={getattr(args, 'animate', False)}")
+    if hasattr(args, "road_width"):
+        print(f"道路宽度 W = {args.road_width} m")
+        print(f"等效瑞雷波速度 VR = {args.rayleigh_velocity} m/s")
+        anomaly = args.anomalies or f"{args.cavity_shape}@({args.cavity_x},{args.cavity_y},{args.cavity_depth})"
+        print(f"异常体 = {anomaly}")
+    if hasattr(args, "scan_mode"):
+        print(f"扫描模式 = {args.scan_mode}, shot_weight_mode = {args.shot_weight_mode}")
+    if args.command == "elastic3d":
+        print(
+            "elastic3d 参数 = "
+            f"space_order={args.elastic_space_order}, abc={args.elastic_abc}, "
+            f"record_component={args.elastic_record_component}, gauge_length={args.elastic_gauge_length}"
+        )
+    print("=" * 64)
 
 
 def add_output_args(parser: argparse.ArgumentParser) -> None:
@@ -141,7 +318,19 @@ def add_elastic3d_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--elastic-nt", type=int, default=420, help="elastic3d 时间步数；越大传播时间越长但计算更慢，默认保证波能到达接收线。")
     parser.add_argument("--elastic-source-frequency", type=float, default=60.0, help="elastic3d Ricker 震源主频，单位 Hz。")
     parser.add_argument("--elastic-source-amplitude", type=float, default=1.0e5, help="elastic3d 垂向力源幅度；过大可能导致图件饱和。")
+    parser.add_argument("--elastic-space-order", type=int, choices=[2, 4], default=2, help="elastic3d 空间差分阶数。2 阶更稳更快；4 阶使用 9/8 与 -1/24 交错差分模板，内部频散更低，边界附近自动降阶。")
+    parser.add_argument("--elastic-abc", choices=["sponge", "cpml"], default="sponge", help="elastic3d 吸收边界。sponge 为默认稳定海绵层；cpml 当前是 experimental CPML-like 阻尼，不是完整 CPML。")
+    parser.add_argument("--elastic-record-component", choices=["vz", "vx", "strain_xx", "strain_rate_xx"], default="vz", help="elastic3d 接收记录分量。strain_rate_xx≈dvx/dx，是沿 x 方向光纤 DAS 应变率近似。")
+    parser.add_argument("--elastic-gauge-length", type=float, default=1.0, help="DAS 近似 gauge length，单位 m；用于 strain_xx/strain_rate_xx 的有限长度空间差分。")
     parser.add_argument("--elastic-no-anomaly", action="store_true", help="elastic3d 中关闭低速低密度异常体，用于和有异常模型对比。")
+
+
+def add_fwi_args(parser: argparse.ArgumentParser) -> None:
+    """FWI 最小原型参数。"""
+
+    parser.add_argument("--fwi-vs-scales", default="0.86,0.92,0.98,1.0,1.04", help="FWI-demo 候选 Vs 缩放因子列表。当前只做一维 misfit 曲线，不做伴随梯度。")
+    parser.add_argument("--fwi-observed-vs-scale", type=float, default=1.0, help="生成目标数据 observed 的 Vs 缩放因子。")
+    parser.add_argument("--fwi-initial-vs-scale", type=float, default=0.9, help="绘制 observed vs synthetic 对比时使用的初始模型 Vs 缩放因子。")
 
 
 def output_options(args: argparse.Namespace) -> dict[str, object]:
@@ -645,10 +834,17 @@ def run_elastic3d_command(args: argparse.Namespace) -> None:
         nt=args.elastic_nt,
         source_frequency=args.elastic_source_frequency,
         source_amplitude=args.elastic_source_amplitude,
+        space_order=args.elastic_space_order,
+        abc=args.elastic_abc,
+        record_component=args.elastic_record_component,
+        gauge_length=args.elastic_gauge_length,
         with_anomaly=not args.elastic_no_anomaly,
     )
     print("elastic3d：三维弹性波全波形有限差分原型，小尺度教学/研究模型，不是工业级模拟。")
     print(f"dx/dy/dz = {cfg.dx:.3f}/{cfg.dy:.3f}/{cfg.dz:.3f} m, dt = {cfg.dt:.6f} s, nt = {cfg.nt}")
+    print(f"space_order = {cfg.space_order}；abc = {cfg.abc}；record_component = {cfg.record_component}；gauge_length = {cfg.gauge_length:.2f} m")
+    if cfg.abc == "cpml":
+        print("提醒：当前 cpml 是 experimental CPML-like 阻尼，尚不是完整带记忆变量的严格 CPML。")
     if cavities:
         print(f"elastic3d 使用显式 --anomalies 输入，共 {len(cavities)} 个低速低密度异常体；请注意坐标需落在小模型范围内。")
     result = run_elastic3d(cfg, cavities)
@@ -656,10 +852,49 @@ def run_elastic3d_command(args: argparse.Namespace) -> None:
     print(f"CFL number = {result.cfl:.3f}，满足稳定条件。")
     print(f"gather shape = {result.gather.shape} = time x receiver")
     plot_elastic3d_outputs(result, outdir, save=bool(opts["save"]), show=bool(opts["show"]), dpi=int(opts["dpi"]))
+    if bool(opts["save"]) and cfg.abc == "cpml":
+        plot_abc_comparison(cfg, outdir, save=True, show=False, dpi=int(opts["dpi"]))
+        print("已输出 abc_compare_sponge_vs_cpml.png，用于边界吸收 sanity check。")
     if bool(args.animate) and not bool(args.no_animate):
         animate_elastic3d_wavefield(result, outdir, save=bool(opts["save"]), show=bool(opts["show"]), fps=args.fps)
         print("已生成 elastic3d_wavefield.gif。")
-    print("输出: velocity_model_slice.png, wavefield_snapshot_*.png, elastic3d_gather.png；--animate 时额外输出 elastic3d_wavefield.gif。")
+    print("输出: velocity_model_slice.png, wavefield_snapshot_*.png, elastic3d_gather_<component>.png；--animate 时额外输出 elastic3d_wavefield.gif。")
+
+
+def run_fwi_demo(args: argparse.Namespace) -> None:
+    """运行 FWI 最小原型：一维 Vs 缩放 misfit 曲线。"""
+
+    outdir = command_outdir(args, "fwi")
+    opts = output_options(args)
+    cfg = Elastic3DConfig(
+        nx=args.nx,
+        ny=args.ny,
+        nz=args.nz,
+        dx=args.dx,
+        dy=args.dy,
+        dz=args.dz,
+        dt=args.elastic_dt,
+        nt=min(args.elastic_nt, 120),
+        source_frequency=args.elastic_source_frequency,
+        source_amplitude=args.elastic_source_amplitude,
+        space_order=args.elastic_space_order,
+        abc=args.elastic_abc,
+        record_component=args.elastic_record_component,
+        gauge_length=args.elastic_gauge_length,
+        with_anomaly=not args.elastic_no_anomaly,
+    )
+    scales = parse_float_list(args.fwi_vs_scales)
+    print("fwi-demo：只计算一维 Vs 缩放 L2 misfit 曲线，不包含伴随梯度或模型更新。")
+    print(f"候选 Vs scales = {scales}")
+    result = run_fwi_misfit_demo(
+        vs_scales=scales,
+        observed_vs_scale=args.fwi_observed_vs_scale,
+        initial_vs_scale=args.fwi_initial_vs_scale,
+        config=cfg,
+    )
+    print(f"最小 misfit 对应 Vs scale = {result.best_vs_scale:.3f}")
+    plot_fwi_demo_outputs(result, outdir, save=bool(opts["save"]), show=bool(opts["show"]), dpi=int(opts["dpi"]))
+    print("输出: misfit_curve.png, observed_vs_synthetic_gather.png。当前不是完整三维弹性伴随 FWI。")
 
 
 def run_all(args: argparse.Namespace) -> None:
@@ -682,6 +917,7 @@ def build_parser() -> argparse.ArgumentParser:
         "sensitivity": run_sensitivity,
         "tutorial": run_tutorial,
         "elastic3d": run_elastic3d_command,
+        "fwi-demo": run_fwi_demo,
         "all": run_all,
     }
     for name, handler in handlers.items():
@@ -695,6 +931,9 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "elastic3d":
             add_elastic3d_args(p)
             add_animation_args(p)
+        if name == "fwi-demo":
+            add_elastic3d_args(p)
+            add_fwi_args(p)
         add_output_args(p)
         p.set_defaults(func=handler)
     return parser
@@ -702,9 +941,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     argv = sys.argv[1:]
-    if not argv or argv[0].startswith("--"):
-        argv = ["workflow", *argv]
-    args = build_parser().parse_args(argv)
+    if not argv and USE_LOCAL_DEBUG_CONFIG:
+        args = build_args_from_local_config()
+        print_local_run_summary(args)
+    else:
+        if not argv or argv[0].startswith("--"):
+            argv = ["workflow", *argv]
+        args = build_parser().parse_args(argv)
     args.func(args)
 
 
