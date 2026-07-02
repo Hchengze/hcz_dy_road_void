@@ -21,6 +21,7 @@ from pathlib import Path
 from road_void.config import CavityConfig, GeometryConfig, NoiseConfig, ProcessingConfig, RecordConfig, RoadVoidConfig, VelocityConfig
 from road_void.elastic3d import Elastic3DConfig, animate_elastic3d_wavefield, plot_abc_comparison, plot_elastic3d_outputs, run_elastic3d
 from road_void.fwi import plot_fwi_demo_outputs, run_fwi_misfit_demo
+from road_void.numerics import run_bem2d_scatter_demo, run_fem1d_wave_demo, run_sem1d_wave_demo
 from road_void.visualization import (
     animate_kinematic_wavefield,
     plot_kinematic_wavefield_frames,
@@ -49,13 +50,14 @@ from road_void.workflow import run_location_workflow, simulate_from_config
 USE_LOCAL_DEBUG_CONFIG = True
 
 # 可选模式："workflow", "geometry", "forward", "velocity", "wavefield",
-# "path", "scan", "sensitivity", "tutorial", "elastic3d", "fwi-demo", "all"。
+# "path", "scan", "sensitivity", "tutorial", "elastic3d", "fwi-demo",
+# "numerics-demo", "all"。
 LOCAL_RUN_MODE = "workflow"
 
 # 输出控制。VSCode 中想弹窗看图可把 LOCAL_SHOW 改为 True；批量烟测建议 False。
 LOCAL_SHOW = False
-LOCAL_SAVE = False
-LOCAL_ANIMATE = False
+LOCAL_SAVE = True
+LOCAL_ANIMATE = True
 LOCAL_OUTDIR = "outputs/local_debug"
 LOCAL_DPI = 150
 
@@ -137,6 +139,13 @@ LOCAL_FWI_PARAMS = dict(
     fwi_initial_vs_scale=0.9,
 )
 
+LOCAL_NUMERICS_PARAMS = dict(
+    method="all",          # "fem", "sem", "bem", "all"。
+    numerics_length=100.0, # 1D FEM/SEM 标量波模型长度，单位 m。
+    numerics_velocity=300.0,
+    numerics_duration=0.24,
+)
+
 
 WORKFLOW_STEPS = [
     ("geometry", "建立道路三维几何：道路、光纤、炮线、空洞"),
@@ -174,6 +183,8 @@ def _local_config_to_argv(mode: str) -> list[str]:
     if mode == "fwi-demo":
         params.update(LOCAL_ELASTIC3D_PARAMS)
         params.update(LOCAL_FWI_PARAMS)
+    if mode == "numerics-demo":
+        params.update(LOCAL_NUMERICS_PARAMS)
 
     argv = [mode]
     for key, value in params.items():
@@ -219,6 +230,8 @@ def print_local_run_summary(args: argparse.Namespace) -> None:
             f"space_order={args.elastic_space_order}, abc={args.elastic_abc}, "
             f"record_component={args.elastic_record_component}, gauge_length={args.elastic_gauge_length}"
         )
+    if args.command == "numerics-demo":
+        print(f"高级数值方法 demo = {args.method}")
     print("=" * 64)
 
 
@@ -331,6 +344,15 @@ def add_fwi_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--fwi-vs-scales", default="0.86,0.92,0.98,1.0,1.04", help="FWI-demo 候选 Vs 缩放因子列表。当前只做一维 misfit 曲线，不做伴随梯度。")
     parser.add_argument("--fwi-observed-vs-scale", type=float, default=1.0, help="生成目标数据 observed 的 Vs 缩放因子。")
     parser.add_argument("--fwi-initial-vs-scale", type=float, default=0.9, help="绘制 observed vs synthetic 对比时使用的初始模型 Vs 缩放因子。")
+
+
+def add_numerics_args(parser: argparse.ArgumentParser) -> None:
+    """高级数值方法教学 demo 参数。"""
+
+    parser.add_argument("--method", choices=["fem", "sem", "bem", "all"], default="all", help="选择运行 FEM、SEM、BEM 或全部教学原型。")
+    parser.add_argument("--numerics-length", type=float, default=100.0, help="FEM/SEM 1D 标量波模型长度，单位 m。")
+    parser.add_argument("--numerics-velocity", type=float, default=300.0, help="FEM/SEM 标量波速度，单位 m/s。")
+    parser.add_argument("--numerics-duration", type=float, default=0.24, help="FEM/SEM 时间长度，单位 s。")
 
 
 def output_options(args: argparse.Namespace) -> dict[str, object]:
@@ -897,6 +919,48 @@ def run_fwi_demo(args: argparse.Namespace) -> None:
     print("输出: misfit_curve.png, observed_vs_synthetic_gather.png。当前不是完整三维弹性伴随 FWI。")
 
 
+def run_numerics_demo(args: argparse.Namespace) -> None:
+    """运行 FEM/SEM/BEM 高级数值方法教学原型。"""
+
+    outdir = command_outdir(args, "numerics")
+    opts = output_options(args)
+    methods = ["fem", "sem", "bem"] if args.method == "all" else [args.method]
+    print("numerics-demo：高级数值方法教学/研究原型，不替代默认 workflow。")
+    print(f"method = {args.method}; 输出目录 = {outdir}")
+    for method in methods:
+        if method == "fem":
+            result = run_fem1d_wave_demo(
+                length=args.numerics_length,
+                velocity=args.numerics_velocity,
+                duration=args.numerics_duration,
+                outdir=outdir,
+                save=bool(opts["save"]),
+                show=bool(opts["show"]),
+                dpi=int(opts["dpi"]),
+            )
+            print(f"FEM 1D 完成：nodes={result.x.size}, snapshots={result.snapshots.shape}, receiver_samples={result.receiver_trace.size}")
+        elif method == "sem":
+            result = run_sem1d_wave_demo(
+                length=args.numerics_length,
+                velocity=args.numerics_velocity,
+                duration=args.numerics_duration,
+                outdir=outdir,
+                save=bool(opts["save"]),
+                show=bool(opts["show"]),
+                dpi=int(opts["dpi"]),
+            )
+            print(f"SEM 1D 完成：nodes={result.x.size}, GLL/order_nodes={result.gll_nodes.size}, receiver_samples={result.receiver_trace.size}")
+        elif method == "bem":
+            result = run_bem2d_scatter_demo(
+                outdir=outdir,
+                save=bool(opts["save"]),
+                show=bool(opts["show"]),
+                dpi=int(opts["dpi"]),
+            )
+            print(f"BEM 2D 完成：boundary_points={result.boundary.shape[0]}, receivers={result.receivers.shape[0]}")
+    print("说明：FEM/SEM/BEM 均为标量低维教学原型，不是完整三维弹性模拟。")
+
+
 def run_all(args: argparse.Namespace) -> None:
     """all 作为 workflow 的别名，避免维护两套完整流程。"""
 
@@ -918,6 +982,7 @@ def build_parser() -> argparse.ArgumentParser:
         "tutorial": run_tutorial,
         "elastic3d": run_elastic3d_command,
         "fwi-demo": run_fwi_demo,
+        "numerics-demo": run_numerics_demo,
         "all": run_all,
     }
     for name, handler in handlers.items():
@@ -934,6 +999,8 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "fwi-demo":
             add_elastic3d_args(p)
             add_fwi_args(p)
+        if name == "numerics-demo":
+            add_numerics_args(p)
         add_output_args(p)
         p.set_defaults(func=handler)
     return parser

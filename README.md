@@ -73,6 +73,7 @@ python main.py tutorial --save
 - `tutorial`：生成一套不重复的教学流程图。
 - `elastic3d`：运行小尺度三维弹性波全波形有限差分原型，输出速度切片、波场快照和接收记录。
 - `fwi-demo`：运行一维 `Vs` 缩放 L2 misfit 曲线演示，不是完整伴随 FWI。
+- `numerics-demo`：运行 FEM/SEM/BEM 低维标量教学原型，不替代默认 workflow。
 - `workflow`：默认完整流程入口，控制台按算法步骤解释，输出一套代表性图件。
 - `all`：当前作为 `workflow` 的别名，保留给习惯使用 `all` 的场景；日常推荐使用 `workflow` 或直接 `python main.py`。
 
@@ -269,6 +270,26 @@ outputs/fwi/observed_vs_synthetic_gather.png
 ```
 
 它没有实现伴随方程、梯度、步长搜索或模型更新，因此不能称为完整三维弹性 FWI。
+
+## 高级数值方法教学原型
+
+本项目新增 `road_void/numerics/`，用于逐步自研 FEM/BEM/SEM/FDTD 等数值方法的教学和研究级原型：
+
+```bash
+python main.py numerics-demo --method fem --no-save
+python main.py numerics-demo --method sem --no-save
+python main.py numerics-demo --method bem --no-save
+python main.py numerics-demo --method all --save
+```
+
+当前实现：
+
+- FEM：1D 标量波方程 `M u_tt + K u = f`，线性单元、质量矩阵、刚度矩阵；
+- SEM：1D 标量谱元波动方程，GLL 节点、Lagrange 导数矩阵、质量/刚度组装；
+- BEM：2D 标量边界积分思想演示，圆形边界离散和简化 Green 函数散射响应；
+- FDTD：`road_void/numerics/fdtd.py` 只做路线说明，不复制 `elastic3d`。
+
+这些都是低维标量教学原型，不是完整三维弹性 FEM/BEM/SEM。详细说明见 [docs/advanced_numerical_methods_zh.md](docs/advanced_numerical_methods_zh.md)。
 
 参数含义详见：
 

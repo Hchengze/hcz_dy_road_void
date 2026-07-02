@@ -55,6 +55,12 @@ def test_local_debug_config_builds_elastic3d_args():
     assert args.elastic_space_order == main.LOCAL_ELASTIC3D_PARAMS["elastic_space_order"]
 
 
+def test_local_debug_config_builds_numerics_args():
+    args = build_args_from_local_config("numerics-demo")
+    assert args.command == "numerics-demo"
+    assert args.method == main.LOCAL_NUMERICS_PARAMS["method"]
+
+
 def test_main_workflow_no_save_runs():
     completed = _run_cli("workflow", "--no-save")
     assert "workflow" in completed.stdout
@@ -78,6 +84,13 @@ def test_main_all_alias_runs_workflow():
 def test_main_forward_no_save_runs():
     completed = _run_cli("forward", "--no-save")
     assert "合成数据形状" in completed.stdout
+
+
+def test_main_numerics_demo_no_save_runs():
+    completed = _run_cli("numerics-demo", "--method", "all", "--no-save")
+    assert "FEM 1D 完成" in completed.stdout
+    assert "SEM 1D 完成" in completed.stdout
+    assert "BEM 2D 完成" in completed.stdout
 
 
 def test_main_scan_no_save_runs():
