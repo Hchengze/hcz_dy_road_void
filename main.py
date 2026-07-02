@@ -22,10 +22,15 @@ from shutil import rmtree
 import numpy as np
 
 from road_void.config import CavityConfig, GeometryConfig, NoiseConfig, ProcessingConfig, RecordConfig, RoadVoidConfig, VelocityConfig
+from road_void.dataset import generate_synthetic_survey_dataset, plot_das_like_gather, plot_noise_components, save_synthetic_survey_dataset
+from road_void.diffraction import detect_diffraction_features, plot_diffraction_attribute, plot_diffraction_candidates
+from road_void.elastic_bridge import build_local_elastic_validation_case, plot_elastic_validation_outputs, run_elastic_validation_case
 from road_void.elastic3d import Elastic3DConfig, animate_elastic3d_wavefield, plot_abc_comparison, plot_elastic3d_outputs, run_elastic3d
 from road_void.fwi import plot_fwi_demo_outputs, run_fwi_misfit_demo
+from road_void.inversion import plot_localization_error_summary, plot_uncertainty_summary, run_joint_localization_evaluation, write_research_report
 from road_void.numerics import run_bem2d_scatter_demo, run_fem1d_wave_demo, run_sem1d_wave_demo
 from road_void.numerics.compare import compare_1d_wave_methods
+from road_void.scenario import build_default_subsurface_scenario, plot_subsurface_3d, plot_subsurface_sections
 from road_void.visualization import (
     animate_kinematic_wavefield,
     animate_kinematic_wavefield_3d,
@@ -99,6 +104,10 @@ USE_LOCAL_DEBUG_CONFIG = True
 #   小尺度 3D elastic FDTD 原型，不是默认 workflow。
 #   它的网格范围可能和道路几何不同，重点检查 dx/dy/dz、dt、nt、CFL、异常体是否落入小模型。
 #
+# elastic-validate:
+#   从 workflow 的 RoadVoidConfig 裁剪/平移一个局部区域，生成小尺度 elastic3d validation case。
+#   用于检查主异常体附近的全波场 sanity check，不是把整条道路直接放进 elastic3d。
+#
 # fwi-demo:
 #   只做 L2 misfit 曲线教学演示，不是完整伴随 FWI，不做模型更新。
 #
@@ -109,7 +118,7 @@ USE_LOCAL_DEBUG_CONFIG = True
 #   FDTD/FEM/SEM 统一 1D 标量波 benchmark，用于比较教学原型，不参与道路空洞 workflow。
 LOCAL_RUN_MODE_NOTES = """
 workflow/all/geometry/velocity/forward/wavefield/path/scan/sensitivity/tutorial/
-elastic3d/fwi-demo/numerics-demo/numerics-compare 模式说明见 main.py 顶部注释。
+elastic3d/elastic-validate/fwi-demo/numerics-demo/numerics-compare 模式说明见 main.py 顶部注释。
 """
 LOCAL_RUN_MODE = "workflow"
 
@@ -310,7 +319,7 @@ def _local_config_to_argv(mode: str) -> list[str]:
         params.update(LOCAL_WORKFLOW["scan"])
     if mode in {"workflow", "wavefield", "tutorial", "all"}:
         params.update(LOCAL_WORKFLOW["wavefield"])
-    if mode == "elastic3d":
+    if mode in {"elastic3d", "elastic-validate"}:
         params.update(LOCAL_ELASTIC3D)
     if mode == "fwi-demo":
         params.update(LOCAL_ELASTIC3D)
@@ -545,6 +554,8 @@ def command_outdir(args: argparse.Namespace, name: str) -> Path:
     # outputs/workflow，避免形成另一套独立输出体系。
     if name in {"workflow", "wavefield"} and not args.outdir:
         return Path("outputs") / "workflow"
+    if name == "elastic3d_validation" and not args.outdir:
+        return Path("outputs") / "elastic3d_validation"
     return Path(args.outdir) if args.outdir else Path("outputs") / name
 
 
@@ -1209,6 +1220,10 @@ def run_workflow(args: argparse.Namespace) -> None:
     outdir, opts, manifest = prepare_output_dir(args, "workflow")
     geom = cfg.to_geometry()
     cavities = cfg.to_cavities()
+    scenario = build_default_subsurface_scenario(cfg)
+    survey_dataset = None
+    diffraction_result = None
+    localization_eval = None
 
     print("完整 workflow 开始。步骤顺序：")
     for idx, (_, desc) in enumerate(WORKFLOW_STEPS, start=1):
@@ -1247,6 +1262,18 @@ def run_workflow(args: argparse.Namespace) -> None:
         velocity_info=velocity_plot_info(cfg),
         **opts,
     )
+    if bool(args.save_extra):
+        plot_subsurface_sections(
+            scenario,
+            manifest.add(outdir / "02b_subsurface_model_xz.png"),
+            manifest.add(outdir / "02c_subsurface_model_yz.png"),
+            **opts,
+        )
+        plot_subsurface_3d(
+            scenario,
+            manifest.add(outdir / "02d_subsurface_model_3d.png"),
+            **opts,
+        )
 
     print("\nStep 3：正演模拟。")
     print(f"当前异常体数量: {len(cavities)}；多异常体散射在正演中按等效散射点叠加。")
@@ -1264,6 +1291,24 @@ def run_workflow(args: argparse.Namespace) -> None:
         output=manifest.add(outdir / "03_forward_gather.png"),
         **opts,
     )
+    if bool(args.save_extra):
+        survey_dataset = generate_synthetic_survey_dataset(cfg, workflow)
+        if bool(opts["save"]):
+            npz_path, metadata_path = save_synthetic_survey_dataset(survey_dataset, outdir)
+            manifest.add(npz_path)
+            manifest.add(metadata_path)
+        plot_das_like_gather(
+            survey_dataset,
+            shot_index,
+            manifest.add(outdir / "03b_das_like_gather.png"),
+            **opts,
+        )
+        plot_noise_components(
+            survey_dataset,
+            manifest.add(outdir / "03c_noise_components.png"),
+            **opts,
+        )
+        print("save-extra：已生成结构化 synthetic survey dataset 与 DAS-like response 摘要。")
 
     print("\nStep 4：传播路径说明。")
     print("t_direct = t0 + |S-G| / VR")
@@ -1291,6 +1336,20 @@ def run_workflow(args: argparse.Namespace) -> None:
         )
     else:
         print("当前关闭空洞，跳过 S-D-G 绕射路径图。")
+    if bool(args.save_extra):
+        diffraction_result = detect_diffraction_features(cfg, workflow)
+        plot_diffraction_attribute(
+            diffraction_result,
+            geom,
+            manifest.add(outdir / "04b_diffraction_attribute.png"),
+            **opts,
+        )
+        plot_diffraction_candidates(
+            diffraction_result,
+            manifest.add(outdir / "04c_diffraction_candidates.png"),
+            **opts,
+        )
+        print("save-extra：已输出绕射/散射 envelope 属性和候选体评分。")
 
     print("\nStep 5：定位扫描。")
     print(f"扫描模式 scan-mode = {cfg.processing.scan_mode}；炮权重 shot-weight-mode = {cfg.processing.shot_weight_mode}")
@@ -1319,6 +1378,17 @@ def run_workflow(args: argparse.Namespace) -> None:
         plot_multishot_scan_diagnostics(scan, outdir, **opts)
         for name in ("per_shot_best_x.png", "per_shot_score_contribution.png", "single_shot_vs_joint.png"):
             manifest.add(outdir / name)
+        localization_eval = run_joint_localization_evaluation(cfg, workflow)
+        plot_localization_error_summary(
+            localization_eval,
+            manifest.add(outdir / "05b_localization_error_summary.png"),
+            **opts,
+        )
+        plot_uncertainty_summary(
+            localization_eval,
+            manifest.add(outdir / "05c_uncertainty_slices.png"),
+            **opts,
+        )
     print(f"直达波拟合 VR = {fit.velocity:.1f} m/s")
     print(f"拟合 t0 = {fit.t0:.4f} s, RMS = {fit.residual_rms:.4f} s")
     print(f"最佳疑似异常体 x/y/h/VR = {best.x0:.1f} / {best.y0:.1f} / {best.h:.1f} / {best.velocity:.1f}")
@@ -1425,6 +1495,22 @@ def run_workflow(args: argparse.Namespace) -> None:
 
     print("\nStep 7：结果总结。")
     if bool(args.save_extra):
+        if survey_dataset is None:
+            survey_dataset = generate_synthetic_survey_dataset(cfg, workflow)
+        if diffraction_result is None:
+            diffraction_result = detect_diffraction_features(cfg, workflow)
+        if localization_eval is None:
+            localization_eval = run_joint_localization_evaluation(cfg, workflow)
+        if bool(opts["save"]):
+            report_path = write_research_report(
+                cfg,
+                scenario,
+                survey_dataset,
+                diffraction_result,
+                localization_eval,
+                outdir / "research_report.md",
+            )
+            manifest.add(report_path)
         save_run_parameters(cfg, outdir, bool(opts["save"]))
         manifest.add(outdir / "run_parameters.json")
     print("本次流程完成。")
@@ -1492,6 +1578,58 @@ def run_elastic3d_command(args: argparse.Namespace) -> None:
         manifest.add(outdir / "elastic3d_wavefield.gif")
         print("已生成 elastic3d_wavefield.gif。")
     print("输出: velocity_model_slice.png, wavefield_snapshot_*.png, elastic3d_gather_<component>.png；--animate 时额外输出 elastic3d_wavefield.gif。")
+    manifest.write_and_print()
+
+
+def run_elastic_validate(args: argparse.Namespace) -> None:
+    """从道路 workflow 配置裁剪局部区域，运行小尺度 elastic3d validation。"""
+
+    road_cfg = prepare_road_void_config(args, "elastic-validate")
+    outdir, opts, manifest = prepare_output_dir(args, "elastic3d_validation")
+    elastic_cfg = Elastic3DConfig(
+        nx=args.nx,
+        ny=args.ny,
+        nz=args.nz,
+        dx=args.dx,
+        dy=args.dy,
+        dz=args.dz,
+        dt=args.elastic_dt,
+        nt=min(args.elastic_nt, 260),
+        source_frequency=args.elastic_source_frequency,
+        source_amplitude=args.elastic_source_amplitude,
+        space_order=args.elastic_space_order,
+        abc=args.elastic_abc,
+        record_component=args.elastic_record_component,
+        gauge_length=args.elastic_gauge_length,
+        with_anomaly=not args.elastic_no_anomaly,
+    )
+    case = build_local_elastic_validation_case(road_cfg, elastic_config=elastic_cfg)
+    print("elastic-validate：从 RoadVoidConfig 生成局部 elastic3d validation case。")
+    print(f"局部坐标原点 origin_x/origin_y = {case.origin_x:.2f} / {case.origin_y:.2f} m")
+    print(f"异常体是否落入 elastic3d 小网格 = {case.in_bounds}")
+    print(case.note)
+    result = run_elastic_validation_case(case)
+    print(f"local elastic gather shape = {result.gather.shape}, CFL={result.cfl:.3f}")
+    outputs = plot_elastic_validation_outputs(
+        case,
+        result,
+        outdir,
+        save=bool(opts["save"]),
+        show=bool(opts["show"]),
+        dpi=int(opts["dpi"]),
+    )
+    for path in outputs:
+        manifest.add(path)
+    for name in (
+        "velocity_model_slice.png",
+        "wavefield_snapshot_early.png",
+        "wavefield_snapshot_mid.png",
+        "wavefield_snapshot_late.png",
+        f"elastic3d_gather_{elastic_cfg.record_component}.png",
+    ):
+        manifest.add(outdir / name)
+    print("输出: local_model_slices.png, elastic_gather.png, elastic_wavefield_snapshot.png。")
+    print("说明：这是局部全波场 sanity check，不替代默认道路 workflow。")
     manifest.write_and_print()
 
 
@@ -1636,6 +1774,7 @@ def build_parser() -> argparse.ArgumentParser:
         "sensitivity": run_sensitivity,
         "tutorial": run_tutorial,
         "elastic3d": run_elastic3d_command,
+        "elastic-validate": run_elastic_validate,
         "fwi-demo": run_fwi_demo,
         "numerics-demo": run_numerics_demo,
         "numerics-compare": run_numerics_compare,
@@ -1650,7 +1789,7 @@ def build_parser() -> argparse.ArgumentParser:
         if name in {"wavefield", "tutorial", "workflow", "all"}:
             add_animation_args(p)
             add_wavefield_args(p)
-        if name == "elastic3d":
+        if name in {"elastic3d", "elastic-validate"}:
             add_elastic3d_args(p)
             add_animation_args(p)
         if name == "fwi-demo":

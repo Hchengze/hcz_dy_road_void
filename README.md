@@ -103,6 +103,7 @@ python main.py tutorial --save
 | `sensitivity` | 参数敏感性分析 | 趋势图和 CSV | 速度、噪声、深度、步长 | 适合看趋势，不作为单次定位结论 |
 | `tutorial` | 学习型流程样例 | 少量教学图 | 流程顺序 | 不建议作为正式结果判断入口 |
 | `elastic3d` | 小尺度 3D elastic FDTD 原型 | 弹性波切片、快照、gather | `dx/dy/dz`、`dt`、`CFL`、`Vp/Vs/rho` | 与道路 workflow 尺度不同，不替代运动学定位主线 |
+| `elastic-validate` | 从 workflow 配置裁剪局部 elastic3d 验证模型 | `outputs/elastic3d_validation/` 下的局部模型切片、gather、快照 | 主异常体是否落入小网格、CFL、记录分量 | 局部 sanity check，不是全道路 elastic3d 正演 |
 | `fwi-demo` | L2 misfit 曲线演示 | misfit 曲线和 gather 对比 | `Vs` 缩放候选 | 不是完整伴随 FWI，不做模型更新 |
 | `numerics-demo` | FEM/SEM/BEM 低维标量教学原型 | 低维教学图 | 方法类型 | 不是三维弹性模拟 |
 | `numerics-compare` | FDTD/FEM/SEM 统一 1D benchmark | trace、wavefield、metrics JSON | 到时、峰值、L2 差异 | 不参与道路空洞 workflow |
@@ -266,6 +267,43 @@ outputs/workflow/06_multishot_wavefield.gif
 ```
 
 multi-shot wavefield 是多炮覆盖的传播示意，帮助理解炮点位置如何变化；真正用于定位的是 `scan-mode=joint` 的多炮联合评分。不要把 multi-shot wavefield 称为多炮联合反演。
+
+## 科研级合成数据与定位评估
+
+默认 `python main.py workflow --save` 仍只输出核心 01-05 图件。需要科研记录和附加诊断时，显式运行：
+
+```bash
+python main.py workflow --save --save-extra --clean-output
+```
+
+`--save-extra` 会额外生成：
+
+```text
+outputs/workflow/02b_subsurface_model_xz.png
+outputs/workflow/02c_subsurface_model_yz.png
+outputs/workflow/02d_subsurface_model_3d.png
+outputs/workflow/synthetic_dataset.npz
+outputs/workflow/synthetic_dataset_metadata.json
+outputs/workflow/03b_das_like_gather.png
+outputs/workflow/03c_noise_components.png
+outputs/workflow/04b_diffraction_attribute.png
+outputs/workflow/04c_diffraction_candidates.png
+outputs/workflow/05b_localization_error_summary.png
+outputs/workflow/05c_uncertainty_slices.png
+outputs/workflow/research_report.md
+```
+
+这些结果用于科研记录：地下模型说明、结构化合成 survey dataset、DAS-like 响应近似、绕射/散射属性、joint localization 误差和置信度。DAS-like response 只是沿光纤方向差分/平滑的近似，不是真实 DAS 仪器解调结果。
+
+局部 elastic3d 验证入口：
+
+```bash
+python main.py elastic-validate --save
+```
+
+它会围绕主异常体裁剪局部区域，把道路坐标平移到小尺度 elastic3d 网格，输出 `outputs/elastic3d_validation/`。这是局部全波场 sanity check，不是全道路 elastic3d 正演，也不替代默认 workflow。
+
+后续 FEM/SEM/BEM/FWI 的科研路线见 [docs/research_algorithm_roadmap_zh.md](docs/research_algorithm_roadmap_zh.md)。
 
 ## 常用参数
 

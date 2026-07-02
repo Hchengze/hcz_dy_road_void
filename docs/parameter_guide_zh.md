@@ -153,6 +153,8 @@ lambda = VR / f
 
 每次保存运行会打印本次实际生成文件，并在当前输出目录写入 `output_manifest.txt`。如果某个目录中历史图很多，建议使用 `--clean-output` 避免把旧图误认为新结果。
 
+科研级附加输出使用 `--save-extra` 控制：只有显式开启时才保存地下模型剖面、synthetic dataset、DAS-like gather、绕射属性、定位误差图和 `research_report.md`。默认 workflow 不保存这些扩展文件，以保持输出少而清楚。
+
 ## wavefield 参数
 
 默认单炮：
