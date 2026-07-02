@@ -535,6 +535,15 @@ python -m compileall -q road_void examples main.py
 python -m pytest -q
 ```
 
+如需检查代码层面的 Python warning，可使用：
+
+```bash
+python -W default main.py workflow --no-save
+python -m pytest -q -W default
+```
+
+这里关注的是 `DeprecationWarning`、`RuntimeWarning`、Matplotlib/NumPy warning 等代码运行问题。扫描范围未覆盖异常体、定位置信度低、`layered-effective` 不是完整分层波场等属于物理诊断，应通过控制台摘要和 `research_report.md` 说明，不应依赖 Python warning 刷屏。
+
 ## 关于 YAML 配置
 
 早期版本保留了 `configs/` 和 `road_void/config.py` 中的 YAML 读取能力，主要作为历史兼容和参数记录参考。当前推荐方式是直接通过 `main.py` 的子命令参数修改实验，不再把 YAML 作为主入口。

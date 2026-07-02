@@ -273,6 +273,13 @@ LOCAL_OUTPUT + LOCAL_WORKFLOW -> build_args_from_local_config() -> build_road_vo
 
 程序会打印参数摘要，并对常见不一致给出 warning，例如扫描范围未覆盖异常体、记录长度不足或异常体超出道路横向孔径。
 
+## 代码 warning 与物理诊断
+
+本项目把两类提示分开处理：
+
+- 代码 warning：例如 `DeprecationWarning`、`RuntimeWarning`、NumPy 除零、Matplotlib figure 未关闭等。这类问题应通过代码修复，可用 `python -W default main.py workflow --no-save` 和 `python -m pytest -q -W default` 检查。
+- 物理诊断：例如扫描范围没有覆盖异常体、`y-depth` 耦合明显、定位置信度低、DAS-like 不是完整仪器响应等。这类信息用于解释实验结果，应进入控制台摘要或 `research_report.md`，不应伪装成 Python 运行 warning。
+
 ## 速度图件含义
 
 `outputs/workflow/02_velocity_model.png` 和 `outputs/velocity/velocity_model.png` 展示的是当前运动学正演/扫描使用的等效瑞雷速度模型：

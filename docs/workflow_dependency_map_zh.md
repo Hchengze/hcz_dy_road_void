@@ -137,3 +137,19 @@ fwi-demo
 新增功能时应优先接收当前 workflow 已有对象，例如 `cfg`、`workflow`、`scenario`、`survey_dataset`、`diffraction_result`、`localization_eval`。不要在下游模块内部重新调用默认 `RoadVoidConfig()` 或重新模拟一套数据。
 
 如果某个模块确实需要独立默认值，必须在 docstring 或控制台提示里说明它是验证/教学支线，而不是默认 workflow 主链条。
+
+## 11. 代码 warning 与 workflow 诊断的边界
+
+默认 workflow 的物理限制和解释性提示应写入控制台摘要、`research_report.md` 或文档，例如：
+
+- scan 范围没有覆盖异常体；
+- 定位置信度低；
+- `layered-effective` 只是等效速度近似；
+- DAS-like 响应不是完整 DAS 仪器响应。
+
+这些属于 workflow 诊断，不应通过 Python `warnings.warn()` 刷屏。真正需要清理的是代码层面的 warning，例如 `DeprecationWarning`、`RuntimeWarning`、NumPy/Matplotlib warning。日常检查命令：
+
+```bash
+python -W default main.py workflow --no-save
+python -m pytest -q -W default
+```
