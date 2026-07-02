@@ -74,8 +74,51 @@ python main.py tutorial --save
 - `elastic3d`：运行小尺度三维弹性波全波形有限差分原型，输出速度切片、波场快照和接收记录。
 - `fwi-demo`：运行一维 `Vs` 缩放 L2 misfit 曲线演示，不是完整伴随 FWI。
 - `numerics-demo`：运行 FEM/SEM/BEM 低维标量教学原型，不替代默认 workflow。
+- `numerics-compare`：运行统一 1D 标量波 benchmark，对比 FDTD/FEM/SEM 的接收记录、到时和 L2 差异。
 - `workflow`：默认完整流程入口，控制台按算法步骤解释，输出一套代表性图件。
 - `all`：当前作为 `workflow` 的别名，保留给习惯使用 `all` 的场景；日常推荐使用 `workflow` 或直接 `python main.py`。
+
+## VSCode 本地调试：参数一致性
+
+推荐本地调参时只改 [main.py](main.py) 顶部的 `LOCAL_*_PARAMS`。现在所有主流程都走同一条参数路径：
+
+```text
+LOCAL_*_PARAMS
+        ↓
+build_args_from_local_config()
+        ↓
+build_road_void_config_from_args(args)
+        ↓
+RoadVoidConfig
+        ↓
+geometry / forward / wavefield / path / scan / workflow
+```
+
+因此修改 `LOCAL_GEOMETRY_PARAMS` 里的 `road_width / road_length / channel_spacing / source_spacing` 后，几何图、正演炮检坐标、波场示意、路径图和扫描都会同步使用同一套几何。程序启动时会打印参数摘要和一致性 warning；如果看到“扫描范围没有覆盖异常体”或“记录长度可能不足”，应先调整参数再解释结果。
+
+异常体可以直接改单异常体参数，也可以写多异常体字符串。如果 `anomalies` 非空，它优先于单异常体参数：
+
+```python
+LOCAL_ANOMALY_PARAMS = dict(
+    enable_cavity=True,
+    cavity_shape="cylinder",
+    cavity_x=50.0,
+    cavity_y=10.0,
+    cavity_depth=3.0,
+    cavity_radius=2.0,
+    cavity_size_z=5.0,
+    scattering_strength=1.0,
+    anomalies="",
+)
+```
+
+```python
+LOCAL_ANOMALY_PARAMS = dict(
+    anomalies="sphere:42,8.5,2.2,2.0,1.0;box:58,6,1.5,4,3,1,0.8",
+)
+```
+
+默认 VSCode 本地 workflow 使用 `velocity_mode="layered-effective"`，便于显示道路浅层分层速度，并让 `VR_eff` 真正进入正演和扫描。如果命令行显式指定 `--velocity-mode uniform`，速度图会显示单层均匀速度并标注当前走时使用单一 `VR`。
 
 ## 图件保存与交互显示
 
@@ -113,6 +156,7 @@ python main.py tutorial --save --outdir outputs/tutorial
 - `outputs/tutorial/`
 - `outputs/workflow/`
 - `outputs/sensitivity/`
+- `outputs/numerics/`
 
 `workflow` 默认保存文件名采用步骤编号，便于按算法顺序阅读：
 
@@ -127,6 +171,13 @@ outputs/workflow/05_residual_best_curve.png
 outputs/workflow/05_scan_score_slices.png
 outputs/workflow/06_kinematic_wavefield.gif  # 仅 --animate --save 时生成
 ```
+
+`outputs/workflow/02_velocity_model.png` 是当前运动学正演/扫描使用的等效速度模型展示：
+
+- `uniform`：图上显示单层，走时使用单一 `VR`；
+- `layered-effective`：图上显示多层速度，并标注 `VR`、`VR_eff`、`source_frequency`、`lambda=VR/f`、敏感深度因子和各层速度。
+
+它不是 `elastic3d` 的 `Vp/Vs/rho` 模型，也不是完整 Rayleigh 频散反演。
 
 默认 `workflow` 不生成 GIF，避免每次运行输出过多。需要查看传播过程时：
 
@@ -280,6 +331,7 @@ python main.py numerics-demo --method fem --no-save
 python main.py numerics-demo --method sem --no-save
 python main.py numerics-demo --method bem --no-save
 python main.py numerics-demo --method all --save
+python main.py numerics-compare --save
 ```
 
 当前实现：
@@ -287,9 +339,25 @@ python main.py numerics-demo --method all --save
 - FEM：1D 标量波方程 `M u_tt + K u = f`，线性单元、质量矩阵、刚度矩阵；
 - SEM：1D 标量谱元波动方程，GLL 节点、Lagrange 导数矩阵、质量/刚度组装；
 - BEM：2D 标量边界积分思想演示，圆形边界离散和简化 Green 函数散射响应；
-- FDTD：`road_void/numerics/fdtd.py` 只做路线说明，不复制 `elastic3d`。
+- FDTD：`road_void/numerics/fdtd.py` 不复制 `elastic3d`，只提供路线说明和 1D 标量波 benchmark 辅助。
 
 这些都是低维标量教学原型，不是完整三维弹性 FEM/BEM/SEM。详细说明见 [docs/advanced_numerical_methods_zh.md](docs/advanced_numerical_methods_zh.md)。
+
+`numerics-compare` 使用同一个 1D 均匀标量波问题对比 FDTD/FEM/SEM：
+
+```text
+u_tt = c^2 u_xx + f
+```
+
+三种方法使用相同的 `length / velocity / duration / dt / source_position / receiver_position / source_frequency`。输出：
+
+```text
+outputs/numerics/compare_1d_traces.png
+outputs/numerics/compare_1d_wavefields.png
+outputs/numerics/compare_1d_metrics.json
+```
+
+该 benchmark 主要用于检查首次到时是否接近、接收记录是否有限、L2 差异是否可解释。它仍是低维标量教学对比，不代表完整三维弹性求解器。BEM 仍保持二维标量边界积分思想演示，不参与该 1D 波动方程对比。
 
 参数含义详见：
 

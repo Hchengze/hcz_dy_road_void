@@ -38,6 +38,8 @@ Level 4：BEM / FEM / SEM / DG 等高级数值方法原型与接口
 - 高精度自由表面和完整 CPML 需要更复杂实现；
 - 真实 DAS 应变响应还需考虑光纤方向、gauge length 和耦合。
 
+`road_void/numerics/fdtd.py` 另有一个 1D 标量波 FDTD benchmark 辅助，用于和 FEM/SEM 解同一个低维问题。它不是 elastic3d，也不是道路空洞主正演，只是统一对比用的最小有限差分算例。
+
 后续可继续推进严格 staggered-grid、完整 CPML、DAS 应变响应和更系统的边界反射 benchmark。
 
 ## 3. FEM
@@ -114,6 +116,7 @@ python main.py numerics-demo --method fem --no-save
 python main.py numerics-demo --method sem --no-save
 python main.py numerics-demo --method bem --no-save
 python main.py numerics-demo --method all --save
+python main.py numerics-compare --save
 ```
 
 输出图件默认位于：
@@ -125,9 +128,57 @@ outputs/numerics/sem1d_wavefield.png
 outputs/numerics/sem1d_receiver_trace.png
 outputs/numerics/bem2d_boundary_points.png
 outputs/numerics/bem2d_scattered_response.png
+outputs/numerics/compare_1d_traces.png
+outputs/numerics/compare_1d_wavefields.png
+outputs/numerics/compare_1d_metrics.json
 ```
 
-## 8. 参考资料
+## 8. FDTD/FEM/SEM 统一 1D benchmark
+
+为了避免 FEM、SEM、FDTD 各自“能运行”但不能相互比较，本项目新增：
+
+```bash
+python main.py numerics-compare --save
+```
+
+统一问题为 1D 均匀标量波方程：
+
+```text
+u_tt = c^2 u_xx + f
+```
+
+统一参数包括：
+
+- `length`：模型长度；
+- `velocity`：标量波速度；
+- `duration` 和 `dt`：记录时长与时间步长；
+- `source_position` 和 `receiver_position`：源点与接收点；
+- `source_frequency`：Ricker 点源主频；
+- 固定端边界条件。
+
+三种方法分别为：
+
+- FDTD：二阶中心差分显式推进；
+- FEM：1D 线性单元，组装质量矩阵和刚度矩阵，质量集总后显式推进；
+- SEM：GLL 节点和高阶 Lagrange 基函数，组装谱元质量/刚度并显式推进。
+
+输出的 `compare_1d_metrics.json` 包含：
+
+```json
+{
+  "fdtd_arrival_time": "...",
+  "fem_arrival_time": "...",
+  "sem_arrival_time": "...",
+  "fem_vs_fdtd_l2": "...",
+  "sem_vs_fdtd_l2": "..."
+}
+```
+
+正确阅读方式是：三种方法的主要到时应在同一量级，波形细节允许不同；如果某条记录爆炸、全零或首次到时严重错位，应先检查数值稳定性和离散参数，而不是把结果解释成物理差异。
+
+该 benchmark 仍然是低维标量波教学对比，不代表完整三维弹性求解器。当前最接近道路三维全波场的仍是 `elastic3d`，而默认定位主线仍是快速三维运动学/属性 workflow。
+
+## 9. 参考资料
 
 - FEM 的质量矩阵、刚度矩阵和弱形式可参考有限元方法教材与概述：[Finite element method](https://en.wikipedia.org/wiki/Finite_element_method)、[Stiffness matrix](https://en.wikipedia.org/wiki/Stiffness_matrix)。
 - SEM 的 GLL 节点、高阶 Lagrange 基函数和质量集总思想可参考：[Spectral element method](https://en.wikipedia.org/wiki/Spectral_element_method) 以及 SPECFEM/Komatitsch 系列工作。

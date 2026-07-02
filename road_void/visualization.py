@@ -427,8 +427,14 @@ def plot_velocity_model(
     show: bool = False,
     dpi: int = 180,
     effective_velocity: float | None = None,
+    velocity_info: dict[str, object] | None = None,
 ) -> None:
-    """绘制简化分层等效瑞雷波速度模型，并叠加异常体位置。"""
+    """绘制当前运动学正演/扫描实际使用的等效速度模型。
+
+    ``uniform`` 模式显示单一 VR；``layered-effective`` 模式显示层状速度，
+    并在图注中标出折算后的 ``VR_eff``。注意这里仍是等效瑞雷波走时模型，
+    不是 elastic3d 中的 Vp/Vs/rho 全波场模型。
+    """
 
     cavities = cavities or []
     x = np.linspace(x_range[0], x_range[1], 180)
@@ -444,13 +450,52 @@ def plot_velocity_model(
     )
     plt.colorbar(im, label="等效瑞雷波速度 (m/s)")
     for layer in model.layers:
-        plt.axhline(layer.bottom, color="w", lw=0.8, alpha=0.8)
+        plt.axhline(layer.bottom, color="w", lw=0.9, alpha=0.85)
+        z_mid = 0.5 * (layer.top + layer.bottom)
+        plt.text(
+            x[0] + 0.02 * (x[-1] - x[0]),
+            z_mid,
+            f"{layer.name}: {layer.velocity:.0f} m/s",
+            color="white",
+            fontsize=9,
+            va="center",
+            bbox={"facecolor": "black", "alpha": 0.25, "edgecolor": "none"},
+        )
     for cavity in cavities:
         plt.scatter(cavity.x0, cavity.h, s=130, c="orange", marker=_shape_marker(cavity), edgecolors="k", label=f"{cavity.shape} 异常体")
     plt.xlabel("x 沿道路方向 (m)")
     plt.ylabel("z/深度 (m)")
-    suffix = "" if effective_velocity is None else f"；当前 VR_eff={effective_velocity:.1f} m/s"
-    plt.title(f"简化分层等效瑞雷波速度模型{suffix}")
+    if velocity_info:
+        mode = velocity_info.get("velocity_mode", "unknown")
+        vr = float(velocity_info.get("rayleigh_velocity", effective_velocity or 0.0))
+        vr_eff = float(velocity_info.get("effective_velocity", effective_velocity or vr))
+        f0 = float(velocity_info.get("source_frequency", 0.0))
+        wavelength = float(velocity_info.get("wavelength", 0.0))
+        factor = float(velocity_info.get("sensitivity_depth_factor", 0.0))
+        if mode == "uniform":
+            title = f"uniform：正演/扫描使用单一 VR={vr:.1f} m/s"
+            note = "当前 velocity_mode=uniform；layer_depths/layer_velocities 不参与运动学走时。"
+        else:
+            title = f"layered-effective：层状速度折算 VR_eff={vr_eff:.1f} m/s"
+            note = (
+                f"VR={vr:.1f} m/s, f={f0:.1f} Hz, lambda=VR/f={wavelength:.2f} m, "
+                f"alpha={factor:.2f}\n"
+                f"layer_depths={velocity_info.get('layer_depths')}, "
+                f"layer_velocities={velocity_info.get('layer_velocities')}"
+            )
+        plt.title(title)
+        plt.text(
+            0.5,
+            -0.18,
+            note,
+            transform=plt.gca().transAxes,
+            ha="center",
+            va="top",
+            fontsize=9,
+        )
+    else:
+        suffix = "" if effective_velocity is None else f"；当前 VR_eff={effective_velocity:.1f} m/s"
+        plt.title(f"简化分层等效瑞雷波速度模型{suffix}")
     if cavities:
         plt.legend(loc="lower right")
     _finish_figure(output, save=save, show=show, dpi=dpi)

@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 import main
-from main import build_args_from_local_config, build_parser, config_from_args
+from main import build_args_from_local_config, build_parser, build_road_void_config_from_args, config_from_args
 from road_void.workflow import simulate_from_config
 
 
@@ -61,6 +61,72 @@ def test_local_debug_config_builds_numerics_args():
     assert args.method == main.LOCAL_NUMERICS_PARAMS["method"]
 
 
+def test_local_debug_config_builds_numerics_compare_args():
+    args = build_args_from_local_config("numerics-compare")
+    assert args.command == "numerics-compare"
+    assert args.numerics_velocity == main.LOCAL_NUMERICS_COMPARE_PARAMS["numerics_velocity"]
+
+
+def test_local_geometry_velocity_anomaly_flow_into_single_config():
+    args = build_args_from_local_config("workflow")
+    cfg = build_road_void_config_from_args(args)
+    cavities = cfg.to_cavities()
+    assert cfg.geometry.road_width == main.LOCAL_GEOMETRY_PARAMS["road_width"]
+    assert cfg.geometry.road_length == main.LOCAL_GEOMETRY_PARAMS["road_length"]
+    assert cfg.velocity.velocity_model_type == main.LOCAL_VELOCITY_PARAMS["velocity_mode"]
+    assert cavities
+    if not main.LOCAL_ANOMALY_PARAMS.get("anomalies"):
+        assert cavities[0].shape == main.LOCAL_ANOMALY_PARAMS["cavity_shape"]
+        assert cavities[0].x0 == main.LOCAL_ANOMALY_PARAMS["cavity_x"]
+
+
+def test_single_cylinder_args_flow_to_config_and_geometry():
+    parser = build_parser()
+    args = parser.parse_args([
+        "workflow",
+        "--road-width",
+        "30",
+        "--road-length",
+        "100",
+        "--cavity-shape",
+        "cylinder",
+        "--cavity-x",
+        "50",
+        "--cavity-y",
+        "10",
+        "--cavity-depth",
+        "3",
+        "--cavity-size-z",
+        "5",
+        "--no-save",
+    ])
+    cfg = build_road_void_config_from_args(args)
+    geom = cfg.to_geometry()
+    cavities = cfg.to_cavities()
+    assert geom.road_width == 30.0
+    assert geom.shot_y == 30.0
+    assert cavities[0].shape == "cylinder"
+    assert cavities[0].x0 == 50.0
+    assert cavities[0].size_z == 5.0
+
+
+def test_anomalies_string_has_priority_over_single_cavity_args():
+    parser = build_parser()
+    args = parser.parse_args([
+        "workflow",
+        "--cavity-x",
+        "10",
+        "--anomalies",
+        "sphere:42,8.5,2.2,2.0,1.0;box:58,6,1.5,4,3,1,0.8",
+        "--no-save",
+    ])
+    cfg = build_road_void_config_from_args(args)
+    cavities = cfg.to_cavities()
+    assert len(cavities) == 2
+    assert [c.shape for c in cavities] == ["sphere", "box"]
+    assert cavities[0].x0 == 42.0
+
+
 def test_main_workflow_no_save_runs():
     completed = _run_cli("workflow", "--no-save")
     assert "workflow" in completed.stdout
@@ -91,6 +157,12 @@ def test_main_numerics_demo_no_save_runs():
     assert "FEM 1D 完成" in completed.stdout
     assert "SEM 1D 完成" in completed.stdout
     assert "BEM 2D 完成" in completed.stdout
+
+
+def test_main_numerics_compare_no_save_runs():
+    completed = _run_cli("numerics-compare", "--no-save")
+    assert "numerics-compare" in completed.stdout
+    assert "fdtd_arrival_time" in completed.stdout
 
 
 def test_main_scan_no_save_runs():
@@ -181,6 +253,29 @@ def test_workflow_and_scan_share_parameter_mapping():
     assert workflow_cfg.geometry.road_width == scan_cfg.geometry.road_width == 30.0
     assert workflow_cfg.cavity.cavity_h == scan_cfg.cavity.cavity_h == 2.5
     assert workflow_cfg.noise.noise_level == scan_cfg.noise.noise_level == 0.1
+
+
+def test_velocity_mode_uniform_and_layered_models_differ():
+    parser = build_parser()
+    uniform_args = parser.parse_args(["workflow", "--velocity-mode", "uniform", "--no-save"])
+    layered_args = parser.parse_args(["workflow", "--velocity-mode", "layered-effective", "--no-save"])
+    uniform_cfg = build_road_void_config_from_args(uniform_args)
+    layered_cfg = build_road_void_config_from_args(layered_args)
+    assert len(uniform_cfg.to_velocity_model().layers) == 1
+    assert len(layered_cfg.to_velocity_model().layers) == 3
+    assert layered_cfg.effective_rayleigh_velocity() != uniform_cfg.effective_rayleigh_velocity()
+
+
+def test_layer_velocities_change_effective_velocity_and_times():
+    parser = build_parser()
+    args1 = parser.parse_args(["forward", "--velocity-mode", "layered-effective", "--layer-velocities", "180,240,320", "--no-save"])
+    args2 = parser.parse_args(["forward", "--velocity-mode", "layered-effective", "--layer-velocities", "220,260,360", "--no-save"])
+    cfg1 = build_road_void_config_from_args(args1)
+    cfg2 = build_road_void_config_from_args(args2)
+    assert cfg1.effective_rayleigh_velocity() != cfg2.effective_rayleigh_velocity()
+    t1 = cfg1.to_geometry().direct_times(cfg1.effective_rayleigh_velocity())
+    t2 = cfg2.to_geometry().direct_times(cfg2.effective_rayleigh_velocity())
+    assert not np.allclose(t1, t2)
 
 
 def test_road_width_changes_geometry_and_times():

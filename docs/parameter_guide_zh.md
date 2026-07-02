@@ -77,6 +77,17 @@ lambda = VR / f
 
 单异常体形状。支持 `sphere`、`box`、`cylinder`、`ellipsoid`、`line/zone`。当前 shape 只是等效散射点集合，不代表真实弹性边界散射。
 
+### `--cavity-size-x/y/z` 与 `--cavity-azimuth`
+
+这些参数用于单异常体模式，方便在 VSCode 的 `LOCAL_ANOMALY_PARAMS` 中直接改形状尺度：
+
+- `--cavity-size-x`：`box/ellipsoid` 的 x 向尺寸；`line/zone` 的长度；
+- `--cavity-size-y`：`box/ellipsoid/zone` 的 y 向尺寸；
+- `--cavity-size-z`：`box/ellipsoid/cylinder` 的竖向尺寸或高度；
+- `--cavity-azimuth`：`line/zone` 的平面方位角，单位度。
+
+如果没有设置尺寸，代码会用 `cavity_radius` 推导一个默认等效尺度。尺寸变大通常会增加散射点覆盖范围，使散射事件更宽、更复杂；但当前仍是等效散射点模型，不代表真实边界散射强度。
+
 ### `--anomalies`
 
 多异常体字符串输入，适合本地快速实验：
@@ -184,6 +195,32 @@ J(m) = 0.5 * ||d_cal(m) - d_obs||^2
 ```
 
 当前没有伴随梯度、步长搜索或模型更新。
+
+## VSCode 本地参数一致性
+
+直接运行 `python main.py` 时，如果 `USE_LOCAL_DEBUG_CONFIG=True`，程序会从 `main.py` 顶部的 `LOCAL_*_PARAMS` 构建 argparse 参数，再统一转换为 `RoadVoidConfig`。主要路径为：
+
+```text
+LOCAL_*_PARAMS -> build_args_from_local_config() -> build_road_void_config_from_args() -> RoadVoidConfig
+```
+
+因此：
+
+- 修改 `LOCAL_GEOMETRY_PARAMS` 后，geometry/forward/wavefield/path/scan/workflow 会同步使用同一套道路宽度、道路长度、通道间距和炮点间距；
+- 修改 `LOCAL_ANOMALY_PARAMS` 后，图件、正演和 workflow 会同步显示/使用同一组异常体；
+- 如果 `anomalies` 字符串非空，它优先于单异常体参数；
+- 修改 `LOCAL_VELOCITY_PARAMS.velocity_mode` 后，速度图、正演走时、扫描速度轴和 `run_parameters.json` 会同步反映。
+
+程序会打印参数摘要，并对常见不一致给出 warning，例如扫描范围未覆盖异常体、记录长度不足或异常体超出道路横向孔径。
+
+## 速度图件含义
+
+`outputs/workflow/02_velocity_model.png` 和 `outputs/velocity/velocity_model.png` 展示的是当前运动学正演/扫描使用的等效瑞雷速度模型：
+
+- `uniform`：单层均匀速度，正演和扫描使用单一 `VR`；
+- `layered-effective`：显示分层速度，并把层状速度按 `lambda=VR/f` 和敏感深度因子折算为 `VR_eff`，正演和扫描使用 `VR_eff`。
+
+这张图不是 `elastic3d` 的 `Vp/Vs/rho` 全波场模型，也不是完整 Rayleigh 频散反演。
 
 ## 常见错误设置
 

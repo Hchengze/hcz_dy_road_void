@@ -18,10 +18,13 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
+
 from road_void.config import CavityConfig, GeometryConfig, NoiseConfig, ProcessingConfig, RecordConfig, RoadVoidConfig, VelocityConfig
 from road_void.elastic3d import Elastic3DConfig, animate_elastic3d_wavefield, plot_abc_comparison, plot_elastic3d_outputs, run_elastic3d
 from road_void.fwi import plot_fwi_demo_outputs, run_fwi_misfit_demo
 from road_void.numerics import run_bem2d_scatter_demo, run_fem1d_wave_demo, run_sem1d_wave_demo
+from road_void.numerics.compare import compare_1d_wave_methods
 from road_void.visualization import (
     animate_kinematic_wavefield,
     plot_kinematic_wavefield_frames,
@@ -51,7 +54,7 @@ USE_LOCAL_DEBUG_CONFIG = True
 
 # 可选模式："workflow", "geometry", "forward", "velocity", "wavefield",
 # "path", "scan", "sensitivity", "tutorial", "elastic3d", "fwi-demo",
-# "numerics-demo", "all"。
+# "numerics-demo", "numerics-compare", "all"。
 LOCAL_RUN_MODE = "workflow"
 
 # 输出控制。VSCode 中想弹窗看图可把 LOCAL_SHOW 改为 True；批量烟测建议 False。
@@ -62,8 +65,8 @@ LOCAL_OUTDIR = "outputs/local_debug"
 LOCAL_DPI = 150
 
 LOCAL_GEOMETRY_PARAMS = dict(
-    road_width=15.0,       # 道路横向宽度 W，单位 m；控制锤击线到光纤线的横向孔径。
-    road_length=80.0,      # 沿道路模拟长度，单位 m；需覆盖通道、炮点和异常体。
+    road_width=150.0,       # 道路横向宽度 W，单位 m；控制锤击线到光纤线的横向孔径。
+    road_length=180.0,      # 沿道路模拟长度，单位 m；需覆盖通道、炮点和异常体。
     channel_spacing=1.0,   # DAS 通道间距，单位 m；越小沿 x 采样越密。
     source_spacing=4.0,    # 锤击点距，单位 m；越小多炮约束越强但采集工作量越大。
 )
@@ -71,22 +74,29 @@ LOCAL_GEOMETRY_PARAMS = dict(
 LOCAL_VELOCITY_PARAMS = dict(
     rayleigh_velocity=240.0,          # 等效瑞雷波速度 VR，单位 m/s。
     source_frequency=35.0,            # 锤击主频 f，单位 Hz；lambda=VR/f。
-    velocity_mode="uniform",          # "uniform" 或 "layered-effective"。
+    velocity_mode="layered-effective",          # "uniform" 或 "layered-effective"。
     layer_depths="0.4,1.5,4.0",       # 层底深度，单位 m；layered-effective 使用。
     layer_velocities="180,240,320",   # 每层等效瑞雷速度，单位 m/s。
     sensitivity_depth_factor=0.5,     # z_sensitive≈alpha*lambda。
 )
 
 LOCAL_ANOMALY_PARAMS = dict(
-    cavity_x=42.0,
-    cavity_y=8.5,
-    cavity_depth=2.2,
-    cavity_radius=2.0,
-    cavity_shape="sphere",
-    scattering_strength=1.0,
-    attenuation_strength=0.25,
+    enable_cavity=True,          # False 时等价于命令行 --no-cavity，用于无异常误报检查。
+    cavity_x=42.0,               # 单异常体 x0，单位 m；主要控制绕射顶点沿道路位置。
+    cavity_y=8.5,                # 单异常体 y0，单位 m；单侧 DAS 下与深度 h 存在耦合。
+    cavity_depth=2.2,            # 单异常体顶部/主散射中心深度 h，单位 m。
+    cavity_radius=2.0,           # sphere/cylinder 默认半径，单位 m；也作为 line/zone 的辅助尺度。
+    cavity_shape="sphere",       # sphere/box/cylinder/ellipsoid/line/zone。
+    cavity_size_x=4.0,           # box/ellipsoid 的 x 向尺寸；line/zone 的长度；单位 m。
+    cavity_size_y=3.0,           # box/ellipsoid/zone 的 y 向尺寸；单位 m。
+    cavity_size_z=2.0,           # box/ellipsoid/cylinder 的竖向尺寸或高度；单位 m。
+    cavity_azimuth=0.0,          # line/zone 方位角，单位度；0 表示沿 x 方向。
+    scattering_strength=1.0,     # 散射强度；越大绕射/散射事件越明显。
+    attenuation_strength=0.25,   # 阴影/衰减强度；越大直达波局部能量下降越明显。
+    tail_strength=0.2,           # 散射尾波强度；越大尾波更长，但过大会掩盖主事件。
     # 多异常体格式示例：
     # "sphere:42,8.5,2.2,2.0,1.0;box:58,6,1.5,4,3,1,0.8"
+    # 若这里非空，则优先使用该字符串，忽略上面的单异常体参数。
     anomalies="",
 )
 
@@ -146,6 +156,16 @@ LOCAL_NUMERICS_PARAMS = dict(
     numerics_duration=0.24,
 )
 
+LOCAL_NUMERICS_COMPARE_PARAMS = dict(
+    numerics_length=100.0,             # 统一 1D 标量波 benchmark 长度，单位 m。
+    numerics_velocity=300.0,           # 三种方法使用同一标量波速度，单位 m/s。
+    numerics_duration=0.24,            # 记录时长，单位 s；短时避免固定边界反射主导。
+    numerics_dt=0.0005,                # 统一时间步长，单位 s；需满足 FDTD/FEM/SEM 稳定性。
+    numerics_source_position=25.0,     # 点源位置，单位 m。
+    numerics_receiver_position=75.0,   # 接收点位置，单位 m。
+    numerics_source_frequency=35.0,    # Ricker 源主频，单位 Hz。
+)
+
 
 WORKFLOW_STEPS = [
     ("geometry", "建立道路三维几何：道路、光纤、炮线、空洞"),
@@ -185,10 +205,16 @@ def _local_config_to_argv(mode: str) -> list[str]:
         params.update(LOCAL_FWI_PARAMS)
     if mode == "numerics-demo":
         params.update(LOCAL_NUMERICS_PARAMS)
+    if mode == "numerics-compare":
+        params.update(LOCAL_NUMERICS_COMPARE_PARAMS)
 
     argv = [mode]
     for key, value in params.items():
         if value is None or value == "":
+            continue
+        if key == "enable_cavity":
+            if not bool(value):
+                argv.append("--no-cavity")
             continue
         flag = "--" + key.replace("_", "-")
         if isinstance(value, bool):
@@ -232,6 +258,12 @@ def print_local_run_summary(args: argparse.Namespace) -> None:
         )
     if args.command == "numerics-demo":
         print(f"高级数值方法 demo = {args.method}")
+    if args.command == "numerics-compare":
+        print(
+            "数值方法对比 = "
+            f"L={args.numerics_length} m, c={args.numerics_velocity} m/s, "
+            f"xs={args.numerics_source_position} m, xr={args.numerics_receiver_position} m"
+        )
     print("=" * 64)
 
 
@@ -260,7 +292,11 @@ def add_geometry_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cavity-depth", type=float, default=2.2, help="异常体顶部/主要散射中心深度 h，单位 m；越深绕射到时越晚、能量越弱。")
     parser.add_argument("--cavity-radius", type=float, default=2.0, help="有效异常体半径，单位 m；控制散射影响范围，不代表真实空洞几何边界。")
     parser.add_argument("--cavity-shape", choices=["sphere", "box", "cylinder", "ellipsoid", "line", "zone"], default="sphere", help="单异常体形状。当前只是等效散射点集合：sphere 近圆形空洞，box 井室/箱涵，cylinder 管线/管沟，ellipsoid 脱空，line/zone 长条松散带。")
-    parser.add_argument("--anomalies", default=None, help="多个异常体输入，例如 'sphere:42,8.5,2.2,2.0,1.0;box:58,6,1.5,4,3,1,0.8'。未提供时使用 --cavity-* 构建一个 sphere。")
+    parser.add_argument("--cavity-size-x", type=float, default=None, help="单异常体 x 向尺寸，单位 m；box/ellipsoid 使用完整尺寸，line/zone 表示长度，cylinder 可忽略。")
+    parser.add_argument("--cavity-size-y", type=float, default=None, help="单异常体 y 向尺寸，单位 m；box/ellipsoid/zone 使用，sphere 通常忽略。")
+    parser.add_argument("--cavity-size-z", type=float, default=None, help="单异常体 z 向尺寸或高度，单位 m；cylinder 表示高度，box/ellipsoid 表示竖向尺寸。")
+    parser.add_argument("--cavity-azimuth", type=float, default=0.0, help="line/zone 的平面方位角，单位度；0 表示沿 x 方向，90 表示沿 y 方向。")
+    parser.add_argument("--anomalies", default=None, help="多个异常体输入，例如 'sphere:42,8.5,2.2,2.0,1.0;box:58,6,1.5,4,3,1,0.8'。若提供，优先于单个 --cavity-* 参数。")
     parser.add_argument("--no-cavity", action="store_true", help="关闭空洞散射，用于检查无异常情况下的误报风险。")
 
 
@@ -285,6 +321,7 @@ def add_wave_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--coupling-variation", type=float, default=0.08, help="通道增益随机变化幅度；越大，道间振幅越不一致。")
     parser.add_argument("--scattering-strength", type=float, default=1.0, help="异常体散射强度；越大绕射/散射事件越清楚。")
     parser.add_argument("--attenuation-strength", type=float, default=0.25, help="异常体衰减/阴影强度；越大，异常体附近直达波能量下降越明显。")
+    parser.add_argument("--tail-strength", type=float, default=1.0, help="异常体散射尾波强度；越大尾波越明显，但过大会掩盖主绕射事件。")
 
 
 def add_scan_args(parser: argparse.ArgumentParser) -> None:
@@ -355,6 +392,18 @@ def add_numerics_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--numerics-duration", type=float, default=0.24, help="FEM/SEM 时间长度，单位 s。")
 
 
+def add_numerics_compare_args(parser: argparse.ArgumentParser) -> None:
+    """FDTD/FEM/SEM 统一 1D 标量波 benchmark 参数。"""
+
+    parser.add_argument("--numerics-length", type=float, default=100.0, help="统一 1D 标量波模型长度，单位 m；三种方法使用同一物理域。")
+    parser.add_argument("--numerics-velocity", type=float, default=300.0, help="标量波速度 c，单位 m/s；理论到时约为 |xr-xs|/c。")
+    parser.add_argument("--numerics-duration", type=float, default=0.24, help="记录时长，单位 s；短时 benchmark 主要比较首次到时。")
+    parser.add_argument("--numerics-dt", type=float, default=0.0005, help="统一时间步长，单位 s；需满足 FDTD/FEM/SEM 显式推进稳定性。")
+    parser.add_argument("--numerics-source-position", type=float, default=25.0, help="点源位置，单位 m。")
+    parser.add_argument("--numerics-receiver-position", type=float, default=75.0, help="接收点位置，单位 m。")
+    parser.add_argument("--numerics-source-frequency", type=float, default=35.0, help="Ricker 点源主频，单位 Hz；三种方法统一使用。")
+
+
 def output_options(args: argparse.Namespace) -> dict[str, object]:
     save = bool(args.save) and not bool(args.no_save)
     show = bool(args.show) and not bool(args.no_show)
@@ -377,10 +426,16 @@ def parse_float_list(text: str) -> tuple[float, ...]:
     return values
 
 
-def config_from_args(args: argparse.Namespace) -> RoadVoidConfig:
-    """把 argparse 参数转换为内部配置对象。
+def build_road_void_config_from_args(args: argparse.Namespace) -> RoadVoidConfig:
+    """把 argparse 或 VSCode LOCAL 参数统一转换为 ``RoadVoidConfig``。
 
-    这里使用 dataclass 只是为了复用已有 workflow，不再要求用户修改 YAML。
+    本项目现在要求所有入口都走同一条参数路径：
+
+    ``LOCAL_*_PARAMS / argparse`` -> ``Namespace`` -> ``RoadVoidConfig`` ->
+    ``geometry / forward / wavefield / scan / workflow``。
+
+    这样改道路宽度、异常体位置或速度模式后，几何图、正演、扫描和波场
+    示意不会各自偷偷回到不同默认值。
     """
 
     road_length = getattr(args, "road_length", 80.0)
@@ -408,7 +463,12 @@ def config_from_args(args: argparse.Namespace) -> RoadVoidConfig:
             cavity_radius=getattr(args, "cavity_radius", 2.0),
             scattering_strength=getattr(args, "scattering_strength", 1.0),
             attenuation_strength=getattr(args, "attenuation_strength", 0.25),
+            tail_strength=getattr(args, "tail_strength", 1.0),
             shape=getattr(args, "cavity_shape", "sphere"),
+            size_x=getattr(args, "cavity_size_x", None),
+            size_y=getattr(args, "cavity_size_y", None),
+            size_z=getattr(args, "cavity_size_z", None),
+            azimuth=getattr(args, "cavity_azimuth", 0.0),
             anomalies=getattr(args, "anomalies", None),
         ),
         velocity=VelocityConfig(
@@ -459,21 +519,128 @@ def config_from_args(args: argparse.Namespace) -> RoadVoidConfig:
     return cfg
 
 
-def print_key_parameters(cfg: RoadVoidConfig) -> None:
+def config_from_args(args: argparse.Namespace) -> RoadVoidConfig:
+    """兼容旧测试/旧脚本的别名；新代码优先用 build_road_void_config_from_args。"""
+
+    return build_road_void_config_from_args(args)
+
+
+def validate_config_consistency(cfg: RoadVoidConfig) -> None:
+    """检查同一套配置在几何、异常体、扫描和记录长度上的一致性。
+
+    这里的严重错误仍由 ``road_void.config.validate_config`` 抛出；本函数主要
+    给出研究原型中常见的 warning，例如异常体移到了扫描范围之外、记录
+    时长不足等，帮助 VSCode 本地调参时马上发现“不一致”的根源。
+    """
+
+    geom = cfg.to_geometry()
+    cavities = cfg.to_cavities()
+    g = cfg.geometry
+    p = cfg.processing
+    if geom.n_channels < 3:
+        print("警告：DAS 通道数过少，绕射曲线识别和扫描结果不可靠。")
+    if geom.n_shots < 2:
+        print("警告：炮点数过少，多炮联合约束基本失效。")
+    if abs(float(geom.shot_y) - (g.source_y if g.source_y is not None else g.road_width)) > 1e-9:
+        print("警告：RoadGeometry 中的炮线 y 与配置 source_y/road_width 不一致。")
+    if abs(float(geom.fiber_y) - g.fiber_y) > 1e-9:
+        print("警告：RoadGeometry 中的光纤 y 与配置 fiber_y 不一致。")
+
+    for idx, cav in enumerate(cavities, start=1):
+        prefix = f"警告：异常体 {idx}({cav.shape})"
+        if cav.x0 < -0.05 * g.road_length or cav.x0 > 1.05 * g.road_length:
+            print(f"{prefix} x={cav.x0:.2f} m 明显超出道路长度 [0, {g.road_length:.2f}]，图件/扫描可能难以解释。")
+        if cav.y0 < min(g.fiber_y, geom.shot_y) or cav.y0 > max(g.fiber_y, geom.shot_y):
+            print(f"{prefix} y={cav.y0:.2f} m 不在光纤-炮线横向孔径 [{g.fiber_y:.2f}, {float(geom.shot_y):.2f}] 内。")
+        if cav.h <= 0:
+            print(f"{prefix} depth/h={cav.h:.2f} m 非正，浅层异常体深度设置可能不合理。")
+        if cav.radius <= 0:
+            print(f"{prefix} radius={cav.radius:.2f} m 非正。")
+        if not (p.scan_x_min <= cav.x0 <= p.scan_x_max):
+            print("警告：当前扫描 x 范围没有覆盖设置的异常体位置，扫描结果可能找不到目标。")
+        if not (p.scan_y_min <= cav.y0 <= p.scan_y_max):
+            print("警告：当前扫描 y 范围没有覆盖设置的异常体位置，横向定位可能偏离目标。")
+        if not (p.scan_h_min <= cav.h <= p.scan_h_max):
+            print("警告：当前扫描 h 范围没有覆盖设置的异常体深度，深度扫描可能找不到目标。")
+
+    vr_eff = cfg.effective_rayleigh_velocity()
+    max_sg = float(np.max(geom.source_receiver_distances())) if geom.n_shots and geom.n_channels else 0.0
+    needed = cfg.record.t0 + max_sg / vr_eff + 0.08
+    if cfg.record.duration < needed:
+        print(
+            f"警告：记录长度 duration={cfg.record.duration:.3f}s 可能不足；"
+            f"按最大炮检距估计至少需要约 {needed:.3f}s，直达波或尾波可能被截断。"
+        )
+
+
+def print_key_parameters(cfg: RoadVoidConfig, command: str | None = None) -> None:
+    """打印当前完整参数摘要，便于 VSCode 输出窗口核对配置是否同步。"""
+
     cavities = cfg.to_cavities()
     vr_eff = cfg.effective_rayleigh_velocity()
-    anomaly_text = "none"
-    if cavities:
-        c0 = cavities[0]
-        anomaly_text = f"{c0.shape}@({c0.x0:.1f},{c0.y0:.1f},{c0.h:.1f})"
+    print("-" * 64)
+    if command:
+        print(f"当前运行模式：{command}")
+    primary = "none" if not cavities else f"{cavities[0].shape}@({cavities[0].x0:.1f},{cavities[0].y0:.1f},{cavities[0].h:.1f})"
     print(
         "关键参数："
         f"W={cfg.geometry.road_width:.1f} m, L={cfg.geometry.road_length:.1f} m, "
-        f"dx_rec={cfg.geometry.channel_spacing:.1f} m, dx_src={cfg.geometry.source_spacing:.1f} m, "
-        f"velocity-mode={cfg.velocity.velocity_model_type}, VR={cfg.velocity.rayleigh_velocity:.1f} m/s, "
-        f"VR_eff={vr_eff:.1f} m/s, f={cfg.velocity.source_frequency:.1f} Hz, "
-        f"anomalies={len(cavities)}, primary={anomaly_text}, scan-mode={cfg.processing.scan_mode}, noise={cfg.noise.noise_level:.3f}"
+        f"velocity-mode={cfg.velocity.velocity_model_type}, VR_eff={vr_eff:.1f} m/s, "
+        f"anomalies={len(cavities)}, primary={primary}, scan-mode={cfg.processing.scan_mode}, "
+        f"noise={cfg.noise.noise_level:.3f}"
     )
+    print("道路与观测几何：")
+    print(f"  road_width = {cfg.geometry.road_width:.2f} m, road_length = {cfg.geometry.road_length:.2f} m")
+    print(f"  channel_spacing = {cfg.geometry.channel_spacing:.2f} m, source_spacing = {cfg.geometry.source_spacing:.2f} m")
+    print("异常体：")
+    if not cavities:
+        print("  无异常体（--no-cavity）。")
+    else:
+        for idx, cav in enumerate(cavities, start=1):
+            print(
+                f"  {idx}) shape={cav.shape}, x={cav.x0:.2f}, y={cav.y0:.2f}, depth={cav.h:.2f}, "
+                f"radius={cav.radius:.2f}, size=({cav.size_x},{cav.size_y},{cav.size_z}), "
+                f"azimuth={cav.azimuth:.1f}, strength={cav.scattering_strength:.2f}"
+            )
+    wavelength = cfg.velocity.rayleigh_velocity / cfg.velocity.source_frequency
+    print("速度与频率：")
+    print(f"  velocity_mode = {cfg.velocity.velocity_model_type}")
+    print(f"  VR = {cfg.velocity.rayleigh_velocity:.2f} m/s, VR_eff = {vr_eff:.2f} m/s")
+    print(f"  source_frequency = {cfg.velocity.source_frequency:.2f} Hz, lambda=VR/f = {wavelength:.2f} m")
+    if cfg.velocity.velocity_model_type == "layered-effective":
+        print(f"  layer_depths = {cfg.velocity.layer_depths}, layer_velocities = {cfg.velocity.layer_velocities}")
+    print("扫描范围：")
+    print(f"  x=[{cfg.processing.scan_x_min:.2f}, {cfg.processing.scan_x_max:.2f}], step={cfg.processing.scan_x_step:.2f}")
+    print(f"  y=[{cfg.processing.scan_y_min:.2f}, {cfg.processing.scan_y_max:.2f}], step={cfg.processing.scan_y_step:.2f}")
+    print(f"  h=[{cfg.processing.scan_h_min:.2f}, {cfg.processing.scan_h_max:.2f}], step={cfg.processing.scan_h_step:.2f}")
+    print(f"  scan_mode={cfg.processing.scan_mode}, shot_weight_mode={cfg.processing.shot_weight_mode}, noise={cfg.noise.noise_level:.3f}")
+    print("-" * 64)
+
+
+def prepare_road_void_config(args: argparse.Namespace, command: str | None = None) -> RoadVoidConfig:
+    """构建、检查并回显配置；所有主流程入口都应调用这个函数。"""
+
+    cfg = build_road_void_config_from_args(args)
+    print_key_parameters(cfg, command or getattr(args, "command", None))
+    validate_config_consistency(cfg)
+    return cfg
+
+
+def velocity_plot_info(cfg: RoadVoidConfig) -> dict[str, object]:
+    """整理速度图标题/图注需要的参数，确保图件和正演扫描使用同一配置。"""
+
+    vr = cfg.velocity.rayleigh_velocity
+    f0 = cfg.velocity.source_frequency
+    return {
+        "velocity_mode": cfg.velocity.velocity_model_type,
+        "rayleigh_velocity": vr,
+        "effective_velocity": cfg.effective_rayleigh_velocity(),
+        "source_frequency": f0,
+        "wavelength": vr / f0,
+        "sensitivity_depth_factor": cfg.velocity.sensitivity_depth_factor,
+        "layer_depths": cfg.velocity.layer_depths,
+        "layer_velocities": cfg.velocity.layer_velocities,
+    }
 
 
 def save_run_parameters(cfg: RoadVoidConfig, outdir: Path, enabled: bool) -> None:
@@ -483,7 +650,7 @@ def save_run_parameters(cfg: RoadVoidConfig, outdir: Path, enabled: bool) -> Non
     data = {
         "geometry": cfg.geometry.__dict__,
         "cavity": cfg.cavity.__dict__,
-        "velocity": cfg.velocity.__dict__,
+        "velocity": {**cfg.velocity.__dict__, "velocity_mode": cfg.velocity.velocity_model_type, "effective_rayleigh_velocity": cfg.effective_rayleigh_velocity()},
         "record": cfg.record.__dict__,
         "noise": cfg.noise.__dict__,
         "processing": cfg.processing.__dict__,
@@ -493,20 +660,18 @@ def save_run_parameters(cfg: RoadVoidConfig, outdir: Path, enabled: bool) -> Non
 
 
 def run_geometry(args: argparse.Namespace) -> None:
-    cfg = config_from_args(args)
+    cfg = prepare_road_void_config(args, "geometry")
     outdir = command_outdir(args, "geometry")
     opts = output_options(args)
-    print_key_parameters(cfg)
     plot_road_geometry_3d(cfg.to_geometry(), cfg.to_cavities(), outdir / "geometry_3d.png", **opts)
     plot_geometry_plan_and_sections(cfg.to_geometry(), cfg.to_cavities(), outdir / "geometry_plan_sections.png", **opts)
     save_run_parameters(cfg, outdir, bool(opts["save"]))
 
 
 def run_forward(args: argparse.Namespace) -> None:
-    cfg = config_from_args(args)
+    cfg = prepare_road_void_config(args, "forward")
     outdir = command_outdir(args, "forward")
     opts = output_options(args)
-    print_key_parameters(cfg)
     ds = simulate_from_config(cfg)
     geom = ds.geometry
     cavities = cfg.to_cavities()
@@ -526,18 +691,25 @@ def run_forward(args: argparse.Namespace) -> None:
 
 
 def run_velocity(args: argparse.Namespace) -> None:
-    cfg = config_from_args(args)
+    cfg = prepare_road_void_config(args, "velocity")
     outdir = command_outdir(args, "velocity")
     opts = output_options(args)
-    print_key_parameters(cfg)
     geom = cfg.to_geometry()
-    plot_velocity_model(cfg.to_velocity_model(), (float(geom.channel_x[0]), float(geom.channel_x[-1])), cfg.to_cavities(), outdir / "velocity_model.png", effective_velocity=cfg.effective_rayleigh_velocity(), **opts)
+    plot_velocity_model(
+        cfg.to_velocity_model(),
+        (float(geom.channel_x[0]), float(geom.channel_x[-1])),
+        cfg.to_cavities(),
+        outdir / "velocity_model.png",
+        effective_velocity=cfg.effective_rayleigh_velocity(),
+        velocity_info=velocity_plot_info(cfg),
+        **opts,
+    )
     print(f"说明：velocity-mode={cfg.velocity.velocity_model_type}，当前正演和扫描实际使用 VR_eff={cfg.effective_rayleigh_velocity():.1f} m/s。layered-effective 是轻量近似，不是完整频散反演。")
     save_run_parameters(cfg, outdir, bool(opts["save"]))
 
 
 def run_wavefield(args: argparse.Namespace) -> None:
-    cfg = config_from_args(args)
+    cfg = prepare_road_void_config(args, "wavefield")
     outdir = command_outdir(args, "wavefield")
     opts = output_options(args)
     cavities = cfg.to_cavities()
@@ -583,7 +755,7 @@ def run_wavefield(args: argparse.Namespace) -> None:
 
 
 def run_path(args: argparse.Namespace) -> None:
-    cfg = config_from_args(args)
+    cfg = prepare_road_void_config(args, "path")
     outdir = command_outdir(args, "path")
     opts = output_options(args)
     ds = simulate_from_config(cfg)
@@ -610,10 +782,9 @@ def run_path(args: argparse.Namespace) -> None:
 
 
 def run_scan(args: argparse.Namespace) -> None:
-    cfg = config_from_args(args)
+    cfg = prepare_road_void_config(args, "scan")
     outdir = command_outdir(args, "scan")
     opts = output_options(args)
-    print_key_parameters(cfg)
     wf = run_location_workflow(cfg)
     geom = wf.dataset.geometry
     cavities = cfg.to_cavities()
@@ -643,7 +814,7 @@ def run_scan(args: argparse.Namespace) -> None:
 def run_sensitivity(args: argparse.Namespace) -> None:
     from examples.example_parameter_sensitivity import main as sensitivity_main
 
-    cfg = config_from_args(args)
+    cfg = prepare_road_void_config(args, "sensitivity")
     outdir = command_outdir(args, "sensitivity")
     sensitivity_main(outdir, cfg, save=not args.no_save)
 
@@ -651,10 +822,9 @@ def run_sensitivity(args: argparse.Namespace) -> None:
 def run_tutorial(args: argparse.Namespace) -> None:
     """生成一套不重复的教学流程图：几何、正演、扫描评分和可选动画。"""
 
-    cfg = config_from_args(args)
+    cfg = prepare_road_void_config(args, "tutorial")
     outdir = command_outdir(args, "tutorial")
     opts = output_options(args)
-    print_key_parameters(cfg)
     geom = cfg.to_geometry()
     cavities = cfg.to_cavities()
     plot_geometry_plan_and_sections(geom, cavities, outdir / "01_geometry_plan_sections.png", **opts)
@@ -680,7 +850,7 @@ def run_workflow(args: argparse.Namespace) -> None:
     run_forward/run_scan 导致重复正演、重复扫描和重复图件。
     """
 
-    cfg = config_from_args(args)
+    cfg = prepare_road_void_config(args, "workflow")
     outdir = command_outdir(args, "workflow")
     opts = output_options(args)
     geom = cfg.to_geometry()
@@ -689,7 +859,6 @@ def run_workflow(args: argparse.Namespace) -> None:
     print("完整 workflow 开始。步骤顺序：")
     for idx, (_, desc) in enumerate(WORKFLOW_STEPS, start=1):
         print(f"  Step {idx}: {desc}")
-    print_key_parameters(cfg)
 
     print("\nStep 1：构建三维道路场景。")
     plot_geometry_plan_and_sections(
@@ -721,6 +890,7 @@ def run_workflow(args: argparse.Namespace) -> None:
         cavities,
         outdir / "02_velocity_model.png",
         effective_velocity=vr_eff,
+        velocity_info=velocity_plot_info(cfg),
         **opts,
     )
 
@@ -840,11 +1010,12 @@ def run_workflow(args: argparse.Namespace) -> None:
 def run_elastic3d_command(args: argparse.Namespace) -> None:
     """运行小尺度 3D elastic FDTD 原型，不替代默认运动学 workflow。"""
 
+    road_cfg = prepare_road_void_config(args, "elastic3d")
     outdir = command_outdir(args, "elastic3d")
     opts = output_options(args)
     cavities = None
-    if getattr(args, "anomalies", None) and not args.elastic_no_anomaly:
-        cavities = config_from_args(args).to_cavities()
+    if not args.elastic_no_anomaly:
+        cavities = road_cfg.to_cavities()
     cfg = Elastic3DConfig(
         nx=args.nx,
         ny=args.ny,
@@ -868,7 +1039,7 @@ def run_elastic3d_command(args: argparse.Namespace) -> None:
     if cfg.abc == "cpml":
         print("提醒：当前 cpml 是 experimental CPML-like 阻尼，尚不是完整带记忆变量的严格 CPML。")
     if cavities:
-        print(f"elastic3d 使用显式 --anomalies 输入，共 {len(cavities)} 个低速低密度异常体；请注意坐标需落在小模型范围内。")
+        print(f"elastic3d 使用同一 RoadVoidConfig 中的异常体，共 {len(cavities)} 个；请注意坐标需落在小模型范围内。")
     result = run_elastic3d(cfg, cavities)
     print(f"vmax = {float(result.model.vp.max()):.1f} m/s")
     print(f"CFL number = {result.cfl:.3f}，满足稳定条件。")
@@ -886,6 +1057,7 @@ def run_elastic3d_command(args: argparse.Namespace) -> None:
 def run_fwi_demo(args: argparse.Namespace) -> None:
     """运行 FWI 最小原型：一维 Vs 缩放 misfit 曲线。"""
 
+    prepare_road_void_config(args, "fwi-demo")
     outdir = command_outdir(args, "fwi")
     opts = output_options(args)
     cfg = Elastic3DConfig(
@@ -961,6 +1133,40 @@ def run_numerics_demo(args: argparse.Namespace) -> None:
     print("说明：FEM/SEM/BEM 均为标量低维教学原型，不是完整三维弹性模拟。")
 
 
+def run_numerics_compare(args: argparse.Namespace) -> None:
+    """运行 FDTD/FEM/SEM 统一 1D 标量波 benchmark。"""
+
+    outdir = command_outdir(args, "numerics")
+    opts = output_options(args)
+    print("numerics-compare：统一 1D homogeneous scalar wave benchmark。")
+    print(
+        f"L={args.numerics_length:.1f} m, c={args.numerics_velocity:.1f} m/s, "
+        f"dt={args.numerics_dt:.6f} s, duration={args.numerics_duration:.3f} s"
+    )
+    print(
+        f"source={args.numerics_source_position:.1f} m, receiver={args.numerics_receiver_position:.1f} m, "
+        f"f0={args.numerics_source_frequency:.1f} Hz"
+    )
+    result = compare_1d_wave_methods(
+        length=args.numerics_length,
+        velocity=args.numerics_velocity,
+        duration=args.numerics_duration,
+        dt=args.numerics_dt,
+        source_position=args.numerics_source_position,
+        receiver_position=args.numerics_receiver_position,
+        source_frequency=args.numerics_source_frequency,
+        outdir=outdir,
+        save=bool(opts["save"]),
+        show=bool(opts["show"]),
+        dpi=int(opts["dpi"]),
+    )
+    print("到时与差异指标：")
+    for key, value in result.metrics.items():
+        print(f"  {key}: {value:.6g}" if isinstance(value, float) else f"  {key}: {value}")
+    print("输出: compare_1d_traces.png, compare_1d_wavefields.png, compare_1d_metrics.json。")
+    print("说明：该 benchmark 是低维标量波教学对比，不代表三维弹性道路空洞正演。")
+
+
 def run_all(args: argparse.Namespace) -> None:
     """all 作为 workflow 的别名，避免维护两套完整流程。"""
 
@@ -983,6 +1189,7 @@ def build_parser() -> argparse.ArgumentParser:
         "elastic3d": run_elastic3d_command,
         "fwi-demo": run_fwi_demo,
         "numerics-demo": run_numerics_demo,
+        "numerics-compare": run_numerics_compare,
         "all": run_all,
     }
     for name, handler in handlers.items():
@@ -1001,6 +1208,8 @@ def build_parser() -> argparse.ArgumentParser:
             add_fwi_args(p)
         if name == "numerics-demo":
             add_numerics_args(p)
+        if name == "numerics-compare":
+            add_numerics_compare_args(p)
         add_output_args(p)
         p.set_defaults(func=handler)
     return parser

@@ -207,6 +207,10 @@ t_diff(S_j, G_i) = t0 + |S_j - D| / VR + |D - G_i| / VR
 - 扫描评分图：看高分区是否围绕真值或疑似异常范围；
 - 动画：理解直达波前、空洞散射波前和 DAS 接收线之间的几何关系。
 
+当前 `workflow` 的速度模型图会真实反映 `velocity_mode`：`uniform` 显示单层等效速度，`layered-effective` 显示层状速度并标注 `VR_eff`。`VR_eff` 会进入运动学正演和扫描，但它仍是轻量有效速度近似，不是完整 Rayleigh 频散反演或 `elastic3d` 的 `Vp/Vs/rho` 模型。
+
+直接在 VSCode 运行 `main.py` 时，`LOCAL_*_PARAMS` 会先统一转换成 `RoadVoidConfig`，再供几何、正演、波场、路径和扫描共用。这样修改道路宽度、异常体位置或速度模式后，各步骤应保持一致；若扫描范围未覆盖异常体或记录长度不足，程序会在控制台给出 warning。
+
 ## 7. 小尺度 3D elastic FDTD 原型
 
 `python main.py elastic3d` 会运行独立的小尺度三维弹性波全波形有限差分原型。它使用三维各向同性 velocity-stress 变量：

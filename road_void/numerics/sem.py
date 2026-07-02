@@ -82,6 +82,8 @@ def run_sem1d_wave_demo(
     velocity: float = 300.0,
     duration: float = 0.24,
     dt: float | None = None,
+    source_position: float | None = None,
+    receiver_position: float | None = None,
     source_frequency: float = 35.0,
     save: bool = False,
     show: bool = False,
@@ -114,8 +116,10 @@ def run_sem1d_wave_demo(
     dt = float(dt or 0.18 * dx_min / velocity)
     n_steps = max(8, int(duration / dt) + 1)
     time = np.arange(n_steps, dtype=float) * dt
-    source_index = int(np.argmin(np.abs(x - 0.25 * length)))
-    receiver_index = int(np.argmin(np.abs(x - 0.75 * length)))
+    source_position = 0.25 * length if source_position is None else source_position
+    receiver_position = 0.75 * length if receiver_position is None else receiver_position
+    source_index = int(np.argmin(np.abs(x - source_position)))
+    receiver_index = int(np.argmin(np.abs(x - receiver_position)))
     u_prev = np.zeros(n_global, dtype=float)
     u = np.zeros(n_global, dtype=float)
     receiver_trace = np.zeros(n_steps, dtype=float)
