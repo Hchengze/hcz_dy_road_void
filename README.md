@@ -86,6 +86,27 @@ python main.py tutorial --save
 - `workflow`：默认完整流程入口，控制台按算法步骤解释，输出一套代表性图件。
 - `all`：当前作为 `workflow` 的别名，保留给习惯使用 `all` 的场景；日常推荐使用 `workflow` 或直接 `python main.py`。
 
+## LOCAL_RUN_MODE 模式说明
+
+`main.py` 顶部已经把常用运行模式写成注释表。这里再给一个阅读版摘要，方便在 VSCode 中修改 `LOCAL_RUN_MODE` 前快速判断该跑哪一步：
+
+| 模式 | 主要用途 | 主要输出 | 重点检查 | 注意事项 |
+| --- | --- | --- | --- | --- |
+| `workflow` | 推荐主入口，按几何、速度、正演、路径、扫描、总结顺序运行 | `outputs/workflow/01_*.png` 到 `05_*.png` | `LOCAL_WORKFLOW["geometry"]`、`["velocity"]`、`["anomaly"]`、`["scan"]` | 默认不生成 GIF；`--animate` 才输出第 6 步波场 |
+| `all` | `workflow` 的别名 | 同 `workflow` | 同 `workflow` | 不额外跑 numerics 或 elastic3d，避免重复输出 |
+| `geometry` | 只检查道路、光纤、炮线、异常体几何 | 几何平面/剖面和 3D 图 | `road_width`、`road_length`、`cavity_x/y/depth` | `01_geometry_plan_sections.png` 第三子图是 y-z 横剖面 |
+| `velocity` | 只检查当前运动学正演/扫描使用的速度模型 | `velocity_model.png` | `velocity_mode`、`layer_depths`、`layer_velocities` | `layered-effective` 只是计算 `VR_eff`，不是完整频散反演 |
+| `forward` | 只生成合成 shot gather | `forward_shot_gather.png` | `VR/VR_eff`、异常体强度、噪声 | 用于看直达波和散射/绕射事件是否合理 |
+| `wavefield` | 调试 workflow 第 6 步波场示意 | `06_wavefield_*.png/gif` | `wavefield_view`、`wavefield_mode`、炮号 | 默认是 x-y 平面运动学示意，不是完整 3D 弹性波场 |
+| `path` | 只看 S-G 直达路径和 S-D-G 绕射路径 | 路径图和 gather 曲线叠加 | 炮点、异常体、接收点几何 | 适合核查走时公式的几何含义 |
+| `scan` | 只运行三维绕射扫描定位 | 残差曲线和评分切片 | `scan_x/y/h/vr` 范围和步长 | 扫描范围不覆盖异常体时不可能找回目标 |
+| `sensitivity` | 参数敏感性分析 | 趋势图和 CSV | 速度、噪声、深度、步长 | 适合看趋势，不作为单次定位结论 |
+| `tutorial` | 学习型流程样例 | 少量教学图 | 流程顺序 | 不建议作为正式结果判断入口 |
+| `elastic3d` | 小尺度 3D elastic FDTD 原型 | 弹性波切片、快照、gather | `dx/dy/dz`、`dt`、`CFL`、`Vp/Vs/rho` | 与道路 workflow 尺度不同，不替代运动学定位主线 |
+| `fwi-demo` | L2 misfit 曲线演示 | misfit 曲线和 gather 对比 | `Vs` 缩放候选 | 不是完整伴随 FWI，不做模型更新 |
+| `numerics-demo` | FEM/SEM/BEM 低维标量教学原型 | 低维教学图 | 方法类型 | 不是三维弹性模拟 |
+| `numerics-compare` | FDTD/FEM/SEM 统一 1D benchmark | trace、wavefield、metrics JSON | 到时、峰值、L2 差异 | 不参与道路空洞 workflow |
+
 ## VSCode 本地调试：参数一致性
 
 推荐本地调参时只改 [main.py](main.py) 顶部的 `LOCAL_OUTPUT` 和 `LOCAL_WORKFLOW`。现在所有主流程都走同一条参数路径：
@@ -218,7 +239,18 @@ wavefield 与速度模式的关系：
 - `velocity-mode=uniform`：wavefield 使用原始 `VR`；
 - `velocity-mode=layered-effective`：wavefield 使用层状速度折算出的 `VR_eff`。
 
-但 layered-effective wavefield 仍是 x-y 平面等效运动学波场，波前会像均匀介质一样扩散；它只是使用 `VR_eff` 改变传播半径和到时，并在 `06_wavefield_velocity_context.png` 中显示分层速度背景。不要把它解释为严格分层介质弹性波场。真正的分层全波场现象应使用 `elastic3d` 或后续更严格的数值方法检查。
+默认 `--wavefield-view plan` 输出的是 **x-y 地表平面运动学波场示意**。这样画是合理的，因为道路、光纤和锤击点主要布置在地表平面，瑞雷波传播路径首先需要从平面上理解；深度 `z` 通过异常体深度进入 `S-D-G` 走时计算，但图上不显示完整三维波场。
+
+可选 `--wavefield-view 3d` 会输出三维运动学等时面示意：
+
+```bash
+python main.py wavefield --wavefield-view 3d --save
+python main.py wavefield --wavefield-view 3d --animate --save
+```
+
+3D kinematic wavefield 会画出地表、DAS 线、炮点、异常体、直达等时半球和散射等时球面，帮助理解 x-y-z 几何关系。它仍然不是弹性波方程快照；真正的 x-y-z 体波场应使用 `python main.py elastic3d`。
+
+但 layered-effective wavefield 仍是等效运动学波场，波前会像均匀介质一样扩散；它只是使用 `VR_eff` 改变传播半径和到时，并在 `06_wavefield_velocity_context.png` 中显示分层速度背景。不要把它解释为严格分层介质弹性波场。真正的分层全波场现象应使用 `elastic3d` 或后续更严格的数值方法检查。
 
 多炮 wavefield 只在显式请求时生成：
 

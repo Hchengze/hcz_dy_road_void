@@ -200,7 +200,7 @@ t_diff(S_j, G_i) = t0 + |S_j - D| / VR + |D - G_i| / VR
 
 - 三维场景图：看光纤、炮线、道路宽度和异常体是否在正确几何位置；
 - 平面布设图：看 `x-y` 横向孔径和空洞平面位置；
-- 剖面图：看空洞埋深与道路浅层结构；
+- 剖面图：`x-z` 纵剖面看异常体沿道路方向的位置和深度，`y-z` 横穿道路剖面看异常体相对光纤 `y=0` 与锤击线 `y=W` 的横向位置。深度 `z` 约定向下为正，图上 0 在上、深部在下；
 - 速度模型图：看当前使用的是均匀还是分层等效速度模型；
 - shot gather：看直达波同相轴和空洞绕射/散射是否可见；
 - 残差 gather：看直达波削弱后异常事件是否更突出；
@@ -209,7 +209,9 @@ t_diff(S_j, G_i) = t0 + |S_j - D| / VR + |D - G_i| / VR
 
 当前 `workflow` 的速度模型图会真实反映 `velocity_mode`：`uniform` 显示单层等效速度，`layered-effective` 显示层状速度并标注 `VR_eff`。`VR_eff` 会进入运动学正演和扫描，但它仍是轻量有效速度近似，不是完整 Rayleigh 频散反演或 `elastic3d` 的 `Vp/Vs/rho` 模型。
 
-wavefield 图件也遵循同一速度逻辑：`uniform` 使用 `VR`，`layered-effective` 使用 `VR_eff`。但是 layered-effective wavefield 仍然只是 x-y 平面等效运动学波场，所以波前会像均匀介质一样扩散；速度上下文图只用于说明 `VR_eff` 来自哪一个层状模型。不要把它解释为严格分层介质中的折射、反射或弹性波场。
+wavefield 图件也遵循同一速度逻辑：`uniform` 使用 `VR`，`layered-effective` 使用 `VR_eff`。默认 `--wavefield-view plan` 是 x-y 地表平面运动学波场示意：道路、DAS 光纤和锤击点都在地表平面上，适合检查直达波前、异常体触发时刻和单侧孔径关系。深度 `z` 通过异常体深度进入 `S-D-G` 绕射走时，但平面图不显示完整 x-y-z 波场。
+
+可选 `--wavefield-view 3d` 会输出三维运动学等时面示意，包含地表、DAS 线、炮点、异常体、直达等时半球和散射等时球面。它的作用是帮助理解三维几何和走时关系，不是完整弹性波场；真正 x-y-z 体波场应使用独立的 `elastic3d` 小尺度有限差分原型。layered-effective wavefield 仍然不会伪造分层介质中的折射、反射或模式转换，它只是用层状速度折算得到的 `VR_eff` 改变运动学传播半径和到时。
 
 multi-shot wavefield 只是把多个炮点按顺序激发出来，帮助理解多炮覆盖范围和炮点位置变化。真正参与定位的是 `scan-mode=joint` 的多炮联合评分；multi-shot wavefield 不是多炮联合反演。
 

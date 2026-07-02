@@ -123,6 +123,8 @@ lambda = VR / f
 
 步长越小，定位网格越细，但计算量越大；步长过大可能导致真实峰值没有被采样到。`--top-k` 用于观察候选点非唯一性，`--uncertainty-threshold` 用于估计接近最高分的参数范围。
 
+`main.py` 顶部的 `LOCAL_WORKFLOW["scan"]` 对这些参数逐项写了中文注释。调参时最重要的检查是：`scan_x/y/h` 范围必须覆盖你设置的异常体位置，否则扫描结果不会回到真实位置；`scan_y_step` 和 `scan_h_step` 不宜过粗，因为单侧 DAS + 对侧锤击几何下 `y-h` 耦合明显，过粗网格会让这种非唯一性被误读成单一最优点。
+
 ### `--scan-mode`
 
 - `joint`：默认，多炮联合扫描；
@@ -171,7 +173,12 @@ outputs/workflow/06_wavefield_velocity_context.png
 - `velocity-mode=uniform`：wavefield 使用原始 `VR`；
 - `velocity-mode=layered-effective`：wavefield 使用折算后的 `VR_eff`。
 
-注意：layered-effective wavefield 仍是等效运动学示意，不是严格分层介质弹性波场；图中的分层速度只说明 `VR_eff` 的来源。
+`--wavefield-view plan/3d` 控制波场示意的维度：
+
+- `plan`：默认，输出 x-y 地表平面运动学波场示意。它适合看道路平面孔径、炮点、DAS 线和异常体平面位置；异常体深度 `z` 进入 `S-D-G` 走时，但图上不显示完整 z 方向波场。
+- `3d`：输出三维运动学等时面示意。它会画地表、DAS 线、炮点、异常体、直达等时半球和散射等时球面，用于理解三维几何关系。
+
+注意：无论 `plan` 还是 `3d`，这里的 wavefield 都是运动学示意，不是严格弹性波方程快照。layered-effective wavefield 仍是等效运动学示意；图中的分层速度只说明 `VR_eff` 的来源，不表示已经模拟了分层介质中的反射、折射或模式转换。
 
 多炮示意参数：
 
@@ -218,6 +225,8 @@ python main.py elastic3d --animate --save
 - `--elastic-record-component`：接收记录分量，支持 `vz`、`vx`、`strain_xx`、`strain_rate_xx`；
 - `--elastic-gauge-length`：近似 DAS gauge length，单位 m，用于沿 x 方向应变/应变率差分；
 - `--elastic-no-anomaly`：关闭低速低密度异常体，用于和有异常模型对比。
+
+`main.py` 顶部的 `LOCAL_ELASTIC3D` 对这些参数写了更详细的学习型注释。需要特别注意：`elastic3d` 的坐标范围由 `nx*dx`、`ny*dy`、`nz*dz` 决定，通常远小于道路 workflow 的 `road_length/road_width`；因此不要默认把道路运动学 workflow 的异常体坐标直接解释为 elastic3d 网格中的有效异常体位置。
 
 CFL 检查公式为：
 

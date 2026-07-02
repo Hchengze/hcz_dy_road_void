@@ -10,7 +10,7 @@ import numpy as np
 
 import main
 from main import build_args_from_local_config, build_parser, build_road_void_config_from_args, config_from_args
-from road_void.visualization import compute_direct_wavefield_snapshot
+from road_void.visualization import compute_direct_wavefield_snapshot, geometry_yz_section_metadata
 from road_void.workflow import simulate_from_config
 
 
@@ -44,6 +44,65 @@ def test_local_debug_config_builds_workflow_args():
     assert hasattr(args, "road_width")
     assert args.outdir == "outputs/workflow"
     assert main.LOCAL_OUTPUT["outdir"] != "outputs/local_debug"
+
+
+def test_local_run_mode_notes_are_documented():
+    notes = main.LOCAL_RUN_MODE_NOTES
+    for mode in [
+        "workflow",
+        "all",
+        "geometry",
+        "velocity",
+        "forward",
+        "wavefield",
+        "path",
+        "scan",
+        "sensitivity",
+        "tutorial",
+        "elastic3d",
+        "fwi-demo",
+        "numerics-demo",
+        "numerics-compare",
+    ]:
+        assert mode in notes
+    source = Path("main.py").read_text(encoding="utf-8")
+    assert "LOCAL_RUN_MODE 模式说明" in source
+    assert "x-y 地表平面运动学" in source
+    assert "不是完整伴随 FWI" in source
+
+
+def test_scan_and_elastic3d_local_parameters_have_learning_comments():
+    source = Path("main.py").read_text(encoding="utf-8")
+    for key in [
+        "scan_mode",
+        "shot_index",
+        "shot_weight_mode",
+        "scan_x_min",
+        "scan_x_max",
+        "scan_x_step",
+        "scan_y_min",
+        "scan_y_max",
+        "scan_y_step",
+        "scan_h_min",
+        "scan_h_max",
+        "scan_h_step",
+        "scan_vr_min",
+        "scan_vr_max",
+        "scan_vr_step",
+        "top_k",
+    ]:
+        assert key in source
+    assert "如果 cavity_x 不在范围内" in source
+    assert "y 与 h 耦合" in source
+    for phrase in [
+        "nx/ny/nz",
+        "dx/dy/dz",
+        "CFL",
+        "Vp/Vs/rho",
+        "strain_rate_xx",
+        "elastic3d 是小网格",
+    ]:
+        assert phrase in source
 
 
 def test_wavefield_default_outdir_is_workflow_tree():
@@ -243,6 +302,46 @@ def test_wavefield_layered_cli_prints_velocity_mode_and_vreff():
     completed = _run_cli("wavefield", "--velocity-mode", "layered-effective", "--no-save")
     assert "velocity_mode=layered-effective" in completed.stdout
     assert "VR_eff" in completed.stdout
+
+
+def test_wavefield_view_plan_and_3d_run():
+    plan = _run_cli("wavefield", "--wavefield-view", "plan", "--no-save")
+    view3d = _run_cli("wavefield", "--wavefield-view", "3d", "--no-save")
+    assert "wavefield-view = plan" in plan.stdout
+    assert "wavefield-view = 3d" in view3d.stdout
+    assert "3D" in view3d.stdout or "三维" in view3d.stdout
+
+
+def test_wavefield_view_3d_save_generates_key_frames():
+    outdir = Path(".tmp_test_outputs/wavefield_3d_frames")
+    completed = _run_cli("wavefield", "--wavefield-view", "3d", "--save", "--clean-output", "--outdir", str(outdir))
+    assert completed.returncode == 0
+    assert (outdir / "06_wavefield_3d_frame_early.png").exists()
+    assert (outdir / "06_wavefield_3d_frame_hit_cavity.png").exists()
+    assert (outdir / "06_wavefield_3d_frame_scattered.png").exists()
+
+
+def test_geometry_yz_section_metadata_tracks_road_width_and_cavity():
+    parser = build_parser()
+    args = parser.parse_args([
+        "geometry",
+        "--road-width",
+        "35",
+        "--cavity-y",
+        "12",
+        "--cavity-depth",
+        "3.4",
+        "--no-save",
+    ])
+    cfg = build_road_void_config_from_args(args)
+    meta = geometry_yz_section_metadata(cfg.to_geometry(), cfg.to_cavities())
+    assert meta["title"] == "横穿道路剖面（y-z）"
+    assert meta["x_axis"] == "y"
+    assert meta["y_axis"] == "z_depth_positive_down"
+    assert meta["shot_y"] == 35.0
+    assert meta["y_limits"][1] >= 35.0
+    assert meta["cavity_points"][0] == (12.0, 3.4)
+    assert meta["z_limits"][0] > meta["z_limits"][1]
 
 
 def test_workflow_cylinder_anomaly_runs_with_coarse_scan():

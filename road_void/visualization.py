@@ -366,6 +366,27 @@ def plot_road_geometry_3d(
     _finish_figure(output, save=save, show=show, dpi=dpi)
 
 
+def geometry_yz_section_metadata(geometry: RoadGeometry, cavities: list[Cavity] | None = None) -> dict[str, object]:
+    """返回 y-z 横穿道路剖面的坐标定义，供测试和人工核查使用。
+
+    本项目统一约定：x 沿道路，y 横穿道路，z 为深度且向下为正。第三个
+    geometry 子图必须以 y 为横轴、z/深度为纵轴，并把异常体画在
+    ``(cavity_y, cavity_depth)``，不能误画成 z-y。
+    """
+
+    cavities = cavities or []
+    return {
+        "title": "横穿道路剖面（y-z）",
+        "x_axis": "y",
+        "y_axis": "z_depth_positive_down",
+        "fiber_y": float(geometry.fiber_y),
+        "shot_y": float(geometry.shot_y),
+        "y_limits": (float(geometry.fiber_y) - 2.0, float(geometry.shot_y) + 2.0),
+        "z_limits": (6.0, -0.5),
+        "cavity_points": [(float(cav.y0), float(cav.h)) for cav in cavities],
+    }
+
+
 def plot_geometry_plan_and_sections(
     geometry: RoadGeometry,
     cavities: list[Cavity] | None = None,
@@ -411,9 +432,17 @@ def plot_geometry_plan_and_sections(
         axes[2].scatter(cavity.y0, cavity.h, s=80, c="orange", marker=_shape_marker(cavity), edgecolors="k", label=f"{cavity.shape} 异常体" if idx == 0 else None)
     axes[2].set_xlim(geometry.fiber_y - 2, float(geometry.shot_y) + 2)
     axes[2].set_ylim(6, -0.5)
-    axes[2].set_xlabel("y (m)")
-    axes[2].set_ylabel("z/深度 (m)")
-    axes[2].set_title("y-z 横向剖面")
+    axes[2].set_xlabel("y 横穿道路方向 (m)")
+    axes[2].set_ylabel("z/深度 (m，向下为正)")
+    axes[2].set_title("横穿道路剖面（y-z）")
+    axes[2].text(
+        0.02,
+        0.04,
+        "光纤 y=0；锤击线 y=W；0 在上、深部在下",
+        transform=axes[2].transAxes,
+        fontsize=8,
+        bbox={"facecolor": "white", "alpha": 0.75, "edgecolor": "none"},
+    )
     axes[2].legend(loc="upper right")
     _finish_figure(output, save=save, show=show, dpi=dpi)
 
@@ -692,7 +721,7 @@ def animate_kinematic_wavefield(
         ax.set_xlabel("x 沿道路方向 (m)")
         ax.set_ylabel("y 横穿道路方向 (m)")
         time_text = f"t={frame_time:.3f} s" if global_time is None else f"global_time={global_time:.3f} s, local_t={frame_time:.3f} s"
-        ax.set_title(f"等效运动学传播示意（非弹性波场）；{time_text}\n{title_note}", fontsize=10)
+        ax.set_title(f"x-y 平面运动学波场示意（非弹性波场）；{time_text}\n深度 z 只进入 S-D-G 走时，不显示完整三维波场；{title_note}", fontsize=9)
         ax.legend(loc="upper right", fontsize=8)
         return [im]
 
@@ -752,6 +781,202 @@ def plot_kinematic_wavefield_frames(
         )
 
 
+def _draw_wire_sphere(
+    ax: plt.Axes,
+    center: tuple[float, float, float],
+    radius: float,
+    *,
+    color: str,
+    alpha: float = 0.45,
+    half_down: bool = False,
+    label: str | None = None,
+) -> None:
+    """在三维图中画等时球面/半球面线框。
+
+    ``half_down=True`` 用于地表震源的直达波前：只画向地下扩展的半球，
+    因为当前示意强调道路浅层瑞雷波/近地表传播几何，而不是空气中的波场。
+    """
+
+    if radius <= 0:
+        return
+    u = np.linspace(0, 2 * np.pi, 40)
+    v_max = np.pi / 2 if half_down else np.pi
+    v = np.linspace(0, v_max, 18)
+    uu, vv = np.meshgrid(u, v)
+    cx, cy, cz = center
+    x = cx + radius * np.sin(vv) * np.cos(uu)
+    y = cy + radius * np.sin(vv) * np.sin(uu)
+    z = cz + radius * np.cos(vv)
+    ax.plot_wireframe(x, y, z, color=color, alpha=alpha, linewidth=0.6, label=label)
+
+
+def _plot_single_wavefield_frame_3d(
+    geometry: RoadGeometry,
+    cavities: list[Cavity],
+    source_index: int,
+    velocity: float,
+    frame_time: float,
+    output: Path,
+    t0: float,
+    save: bool,
+    show: bool,
+    dpi: int,
+    velocity_info: dict[str, object] | None = None,
+) -> None:
+    """绘制三维运动学等时面示意，不是完整弹性波场。"""
+
+    sx, sy, sz = geometry.shot_xyz[source_index]
+    direct_radius = max(0.0, velocity * max(0.0, frame_time - t0))
+    z_max = max(6.0, max((cav.h + 2.5 * cav.radius for cav in cavities), default=4.0))
+    fig = plt.figure(figsize=(9.2, 6.2))
+    ax = fig.add_subplot(111, projection="3d")
+    x0, x1 = float(geometry.channel_x[0]), float(geometry.channel_x[-1])
+    y0, y1 = float(geometry.fiber_y), float(geometry.shot_y)
+
+    # 地表矩形只作为几何参照；真正传播仍由等时面示意，不是弹性波方程快照。
+    ax.plot([x0, x1], [y0, y0], [0, 0], "c-", lw=2.2, label="DAS 光纤 z=0")
+    ax.plot(geometry.shot_x, np.full_like(geometry.shot_x, y1), np.zeros_like(geometry.shot_x), "r.", ms=3, alpha=0.55, label="锤击线 z=0")
+    ax.scatter([sx], [sy], [sz], s=85, c="lime", edgecolors="k", label="当前震源")
+    _draw_wire_sphere(ax, (float(sx), float(sy), float(sz)), direct_radius, color="white", alpha=0.55, half_down=True, label="直达等时半球")
+
+    for cav in cavities:
+        trigger = t0 + np.sqrt((sx - cav.x0) ** 2 + (sy - cav.y0) ** 2 + (sz - cav.h) ** 2) / velocity
+        scatter_radius = velocity * (frame_time - trigger)
+        points, _ = cav.scatter_points()
+        ax.scatter(points[:, 0], points[:, 1], points[:, 2], s=10, c="darkorange", alpha=0.55)
+        ax.scatter([cav.x0], [cav.y0], [cav.h], s=70, c="orange", edgecolors="k", label=f"{cav.shape} 异常体")
+        ax.plot([sx, cav.x0], [sy, cav.y0], [sz, cav.h], color="orange", ls=":", lw=1.1)
+        if scatter_radius >= 0:
+            _draw_wire_sphere(ax, (cav.x0, cav.y0, cav.h), float(scatter_radius), color="deepskyblue", alpha=0.42, half_down=False, label="散射等时球面")
+        ax.text(cav.x0, cav.y0, cav.h, f"{cav.shape}\n触发 {trigger:.3f}s", fontsize=8)
+
+    note = _wavefield_velocity_note(velocity_info)
+    ax.set_title(
+        "三维运动学波场示意，不是完整弹性波场\n"
+        f"3D kinematic wavefield schematic; t={frame_time:.3f}s; {note}",
+        fontsize=10,
+    )
+    ax.set_xlabel("x 沿道路方向 (m)")
+    ax.set_ylabel("y 横穿道路方向 (m)")
+    ax.set_zlabel("z 深度 (m，向下为正)")
+    ax.set_xlim(x0, x1)
+    ax.set_ylim(min(y0, y1) - 1.0, max(y0, y1) + 1.0)
+    ax.set_zlim(z_max, -0.5)
+    ax.view_init(elev=24, azim=-58)
+    ax.legend(loc="upper left", fontsize=8)
+    _finish_figure(output, save=save, show=show, dpi=dpi)
+
+
+def plot_kinematic_wavefield_frames_3d(
+    geometry: RoadGeometry,
+    cavities: list[Cavity],
+    source_index: int,
+    velocity: float,
+    outdir: str | Path,
+    t0: float = 0.02,
+    save: bool = True,
+    show: bool = False,
+    dpi: int = 180,
+    velocity_info: dict[str, object] | None = None,
+    filename_prefix: str = "06_wavefield_3d",
+) -> list[Path]:
+    """输出三维运动学等时面关键帧。
+
+    深度 z 进入 S-D-G 走时和三维几何显示，但这里仍然只是等时面示意；
+    真正的 x-y-z 弹性波场应使用 ``elastic3d``。
+    """
+
+    if not cavities:
+        return []
+    outdir = Path(outdir)
+    written: list[Path] = []
+    frame_times = _wavefield_frame_times(geometry, cavities, source_index, velocity, t0)
+    for filename, frame_time in frame_times.items():
+        output_name = filename.replace("wavefield_", f"{filename_prefix}_", 1)
+        output = outdir / output_name
+        _plot_single_wavefield_frame_3d(
+            geometry,
+            cavities,
+            source_index,
+            velocity,
+            frame_time,
+            output,
+            t0=t0,
+            save=save,
+            show=show,
+            dpi=dpi,
+            velocity_info=velocity_info,
+        )
+        written.append(output)
+    return written
+
+
+def animate_kinematic_wavefield_3d(
+    geometry: RoadGeometry,
+    cavities: list[Cavity],
+    source_index: int,
+    velocity: float,
+    output: str | Path,
+    t0: float = 0.02,
+    n_frames: int = 32,
+    fps: int = 8,
+    save: bool = True,
+    show: bool = False,
+    velocity_info: dict[str, object] | None = None,
+) -> None:
+    """生成三维运动学等时面 GIF，不是完整弹性波场。"""
+
+    if not cavities:
+        return
+    output = Path(output)
+    if save:
+        output.parent.mkdir(parents=True, exist_ok=True)
+    frame_times = _wavefield_frame_times(geometry, cavities, source_index, velocity, t0)
+    t_end = min(geometry.t_max * 0.8, max(frame_times.values()) + 0.10)
+    times = np.linspace(t0, t_end, n_frames)
+    x0, x1 = float(geometry.channel_x[0]), float(geometry.channel_x[-1])
+    y0, y1 = float(geometry.fiber_y), float(geometry.shot_y)
+    z_max = max(6.0, max((cav.h + 2.5 * cav.radius for cav in cavities), default=4.0))
+    note = _wavefield_velocity_note(velocity_info)
+
+    fig = plt.figure(figsize=(9.2, 6.2))
+    ax = fig.add_subplot(111, projection="3d")
+
+    def draw(frame_time: float) -> list[object]:
+        ax.clear()
+        sx, sy, sz = geometry.shot_xyz[source_index]
+        direct_radius = max(0.0, velocity * max(0.0, frame_time - t0))
+        ax.plot([x0, x1], [y0, y0], [0, 0], "c-", lw=2.2, label="DAS 光纤 z=0")
+        ax.plot(geometry.shot_x, np.full_like(geometry.shot_x, y1), np.zeros_like(geometry.shot_x), "r.", ms=3, alpha=0.55, label="锤击线 z=0")
+        ax.scatter([sx], [sy], [sz], s=85, c="lime", edgecolors="k", label="当前震源")
+        _draw_wire_sphere(ax, (float(sx), float(sy), float(sz)), direct_radius, color="white", alpha=0.55, half_down=True, label="直达等时半球")
+        for cav in cavities:
+            trigger = t0 + np.sqrt((sx - cav.x0) ** 2 + (sy - cav.y0) ** 2 + (sz - cav.h) ** 2) / velocity
+            scatter_radius = velocity * (frame_time - trigger)
+            ax.scatter([cav.x0], [cav.y0], [cav.h], s=70, c="orange", edgecolors="k", label=f"{cav.shape} 异常体")
+            if scatter_radius >= 0:
+                _draw_wire_sphere(ax, (cav.x0, cav.y0, cav.h), float(scatter_radius), color="deepskyblue", alpha=0.42, half_down=False, label="散射等时球面")
+        ax.set_title("三维运动学波场示意，不是完整弹性波场\n" f"t={frame_time:.3f}s; {note}", fontsize=10)
+        ax.set_xlabel("x 沿道路方向 (m)")
+        ax.set_ylabel("y 横穿道路方向 (m)")
+        ax.set_zlabel("z 深度 (m，向下为正)")
+        ax.set_xlim(x0, x1)
+        ax.set_ylim(min(y0, y1) - 1.0, max(y0, y1) + 1.0)
+        ax.set_zlim(z_max, -0.5)
+        ax.view_init(elev=24, azim=-58)
+        ax.legend(loc="upper left", fontsize=8)
+        return []
+
+    anim = animation.FuncAnimation(fig, lambda i: draw(float(times[i])), frames=len(times), interval=1000 / fps, blit=False)
+    if save:
+        anim.save(output, writer=animation.PillowWriter(fps=fps))
+    if show:
+        draw(float(times[min(len(times) // 2, len(times) - 1)]))
+        plt.show()
+    else:
+        plt.close(fig)
+
+
 def _plot_single_wavefield_frame(
     geometry: RoadGeometry,
     cavities: list[Cavity],
@@ -789,7 +1014,7 @@ def _plot_single_wavefield_frame(
     plt.ylim(y[0], y[-1])
     plt.gca().set_aspect("equal", adjustable="box")
     note = _wavefield_velocity_note(velocity_info)
-    plt.title(f"等效运动学传播示意（非弹性波场）；t={frame_time:.3f} s\n{note}", fontsize=10)
+    plt.title(f"x-y 平面运动学波场示意（非弹性波场）；t={frame_time:.3f} s\n深度 z 只进入 S-D-G 走时；{note}", fontsize=9)
     plt.legend(loc="upper right")
     _finish_figure(output, save=save, show=show, dpi=dpi)
 
@@ -899,8 +1124,8 @@ def animate_multishot_kinematic_wavefield(
         ax.set_xlabel("x 沿道路方向 (m)")
         ax.set_ylabel("y 横穿道路方向 (m)")
         ax.set_title(
-            f"multi-shot 运动学示意；shot={shot_index}, source_x={sx:.1f} m, global={global_time:.3f}s\n"
-            f"local_t={local_time:.3f}s；{title_note}",
+            f"multi-shot x-y 平面运动学示意；shot={shot_index}, source_x={sx:.1f} m, global={global_time:.3f}s\n"
+            f"local_t={local_time:.3f}s；z 只进走时；{title_note}",
             fontsize=10,
         )
         ax.legend(loc="upper right", fontsize=8)

@@ -28,7 +28,9 @@ from road_void.numerics import run_bem2d_scatter_demo, run_fem1d_wave_demo, run_
 from road_void.numerics.compare import compare_1d_wave_methods
 from road_void.visualization import (
     animate_kinematic_wavefield,
+    animate_kinematic_wavefield_3d,
     animate_multishot_kinematic_wavefield,
+    plot_kinematic_wavefield_frames_3d,
     plot_kinematic_wavefield_frames,
     plot_multishot_wavefield_frames,
     plot_diffraction_path_demo,
@@ -51,15 +53,70 @@ from road_void.workflow import run_location_workflow, simulate_from_config
 # ``python main.py scan --no-save`` 等命令行参数，则仍然优先使用 argparse。
 USE_LOCAL_DEBUG_CONFIG = True
 
-# 可选模式："workflow", "geometry", "forward", "velocity", "wavefield",
-# "path", "scan", "sensitivity", "tutorial", "elastic3d", "fwi-demo",
-# "numerics-demo", "numerics-compare", "all"。
+# ============================================================
+# LOCAL_RUN_MODE 模式说明
+# ============================================================
+#
+# workflow:
+#   推荐主入口。运行完整道路空洞定位流程：
+#   geometry -> velocity -> forward -> path -> scan -> result plots。
+#   默认输出到 outputs/workflow/，适合日常查看完整结果。
+#   重点检查 LOCAL_WORKFLOW["geometry"], ["velocity"], ["anomaly"], ["scan"]。
+#
+# all:
+#   workflow 的别名，不额外运行 numerics/elastic3d，也不生成重复输出。
+#   保留给习惯输入 all 的场景；日常推荐仍用 workflow。
+#
+# geometry:
+#   只画道路、光纤、炮点、异常体几何图。
+#   用于检查 road_width、road_length、cavity_x/y/depth 是否设置正确。
+#
+# velocity:
+#   只画当前运动学正演/扫描使用的速度模型。
+#   uniform 显示单一 VR；layered-effective 显示分层速度和 VR_eff。
+#
+# forward:
+#   只生成合成炮集/shot gather。
+#   用于检查直达波、散射/绕射事件、噪声和异常体响应。
+#
+# wavefield:
+#   只生成 workflow 第 6 步的波场示意，默认写入 outputs/workflow/。
+#   默认是 x-y 地表平面运动学示意；--wavefield-view 3d 只画三维等时面示意。
+#
+# path:
+#   只画 S-G 直达路径与 S-D-G 绕射路径示意，用于核查炮点、异常体、接收点几何关系。
+#
+# scan:
+#   只运行三维绕射扫描定位。重点检查 scan_x/y/h/velocity 范围是否覆盖异常体。
+#
+# sensitivity:
+#   参数敏感性分析入口，适合比较 velocity、noise、depth、scan step 等参数影响。
+#
+# tutorial:
+#   教学示例入口，用于学习流程，不建议作为正式结果判断。
+#
+# elastic3d:
+#   小尺度 3D elastic FDTD 原型，不是默认 workflow。
+#   它的网格范围可能和道路几何不同，重点检查 dx/dy/dz、dt、nt、CFL、异常体是否落入小模型。
+#
+# fwi-demo:
+#   只做 L2 misfit 曲线教学演示，不是完整伴随 FWI，不做模型更新。
+#
+# numerics-demo:
+#   FEM/SEM/BEM 低维标量教学原型，不是三维弹性模拟。
+#
+# numerics-compare:
+#   FDTD/FEM/SEM 统一 1D 标量波 benchmark，用于比较教学原型，不参与道路空洞 workflow。
+LOCAL_RUN_MODE_NOTES = """
+workflow/all/geometry/velocity/forward/wavefield/path/scan/sensitivity/tutorial/
+elastic3d/fwi-demo/numerics-demo/numerics-compare 模式说明见 main.py 顶部注释。
+"""
 LOCAL_RUN_MODE = "workflow"
 
 LOCAL_OUTPUT = dict(
     save=True,              # True 时保存 workflow 主线图件；False 时只跑流程和控制台摘要。
     show=False,             # True 时弹出 matplotlib 窗口，适合手动看图调参。
-    animate=False,          # True 时才生成 GIF；默认关闭，避免输出过多。
+    animate=False,         # True 时才生成 GIF；默认关闭，避免输出过多。
     save_extra=False,       # True 才保存诊断图、run_parameters 等额外文件。
     clean_output=True,      # True 时只清理当前 outdir 中旧图，不碰其它输出目录。
     outdir="outputs/workflow",
@@ -68,24 +125,24 @@ LOCAL_OUTPUT = dict(
 
 LOCAL_WORKFLOW = dict(
     geometry=dict(
-        road_width=24.0,       # 道路横向宽度 W，单位 m；控制锤击线到光纤线的横向孔径。
-        road_length=80.0,      # 沿道路模拟长度，单位 m；需覆盖通道、炮点和异常体。
+        road_width=30.0,       # 道路横向宽度 W，单位 m；控制锤击线到光纤线的横向孔径。
+        road_length=180.0,      # 沿道路模拟长度，单位 m；需覆盖通道、炮点和异常体。
         channel_spacing=1.0,   # DAS 通道间距，单位 m；越小沿 x 采样越密。
         source_spacing=4.0,    # 锤击点距，单位 m；越小多炮约束越强但采集工作量越大。
     ),
     velocity=dict(
         rayleigh_velocity=240.0,          # 等效瑞雷波速度 VR，单位 m/s。
-        source_frequency=35.0,            # 锤击主频 f，单位 Hz；lambda=VR/f。
+        source_frequency=25.0,            # 锤击主频 f，单位 Hz；lambda=VR/f。
         velocity_mode="layered-effective",# "uniform" 或 "layered-effective"。
-        layer_depths="0.4,1.5,4.0",       # 层底深度，单位 m；layered-effective 使用。
+        layer_depths="0.4,1.5,6",       # 层底深度，单位 m；layered-effective 使用。
         layer_velocities="180,240,320",   # 每层等效瑞雷速度，单位 m/s。
         sensitivity_depth_factor=0.5,     # z_sensitive≈alpha*lambda。
     ),
     anomaly=dict(
         enable_cavity=True,          # False 时等价于命令行 --no-cavity，用于无异常误报检查。
         cavity_x=42.0,               # 单异常体 x0，单位 m；主要控制绕射顶点沿道路位置。
-        cavity_y=8.5,                # 单异常体 y0，单位 m；单侧 DAS 下与深度 h 存在耦合。
-        cavity_depth=2.2,            # 单异常体顶部/主散射中心深度 h，单位 m。
+        cavity_y=15,                # 单异常体 y0，单位 m；单侧 DAS 下与深度 h 存在耦合。
+        cavity_depth=4,            # 单异常体顶部/主散射中心深度 h，单位 m。
         cavity_radius=2.0,           # sphere/cylinder 默认半径，单位 m；也作为 line/zone 的辅助尺度。
         cavity_shape="sphere",       # sphere/box/cylinder/ellipsoid/line/zone。
         cavity_size_x=4.0,           # box/ellipsoid 的 x 向尺寸；line/zone 的长度；单位 m。
@@ -105,23 +162,53 @@ LOCAL_WORKFLOW = dict(
         coupling_variation=0.08,
     ),
     scan=dict(
-        scan_mode="joint",          # "joint", "single-shot", "compare"。
-        shot_index=5,               # single-shot 模式使用的炮号。
-        shot_weight_mode="uniform", # "uniform", "near-cavity", "snr"。
+        # scan_mode: 三维绕射扫描使用哪些炮。joint 为默认多炮联合评分；
+        # single-shot 只看 shot_index 指定的一炮，适合观察单炮定位不稳定性；
+        # compare 会同时保留单炮与联合结果，适合教学对比。
+        scan_mode="joint",
+        # shot_index: single-shot 模式使用的炮号，从 0 开始；应选几何上能照亮
+        # 异常体的炮点。若离异常体太远，绕射能量弱，定位会更不稳定。
+        shot_index=5,
+        # shot_weight_mode: 多炮权重。uniform 等权最稳妥；near-cavity 对靠近候选
+        # x0 的炮加权；snr 用记录能量近似信噪比，噪声复杂时可能有偏置。
+        shot_weight_mode="uniform",
+        # scan_x_min / scan_x_max: 沿道路/光纤方向 x0 搜索范围，单位 m。
+        # 如果 cavity_x 不在范围内，扫描不可能找回真实异常体。
         scan_x_min=20.0,
         scan_x_max=70.0,
+        # scan_x_step: x0 搜索步长，单位 m；越小定位网格越细但计算越慢。
         scan_x_step=2.0,
+        # scan_y_min / scan_y_max: 横穿道路方向 y0 搜索范围，单位 m。
+        # 应覆盖光纤 y=0 到锤击线 y=road_width 之间的疑似区域。
         scan_y_min=2.0,
         scan_y_max=22.0,
+        # scan_y_step: y0 搜索步长，单位 m；单侧 DAS 下 y 与 h 耦合明显，
+        # 因此建议看范围和 top-k，而不是只看一个最优点。
         scan_y_step=2.0,
+        # scan_h_min / scan_h_max: 顶部埋深/主散射中心深度 h 搜索范围，单位 m。
+        # 如果 cavity_depth 不在范围内，深度结果会被截到边界。
         scan_h_min=0.5,
         scan_h_max=5.0,
+        # scan_h_step: 深度搜索步长，单位 m；越小深度分辨更细但计算量增加。
+        # 过大可能让真实深度附近没有采样点。
         scan_h_step=0.3,
+        # scan_vr_min / scan_vr_max: 等效瑞雷速度搜索范围，单位 m/s。
+        # 用于考虑直达波速度拟合误差和 layered-effective 的 VR_eff 不确定性。
         scan_vr_min=220.0,
         scan_vr_max=260.0,
+        # scan_vr_step: 速度搜索步长，单位 m/s；过粗会低估速度-深度耦合。
         scan_vr_step=10.0,
+        # score_method: envelope 对相位误差不敏感，适合合成数据初期验证；
+        # energy 更直接但更容易受残余直达波和噪声影响。
+        score_method="envelope",
+        # top_k: 输出前 k 个候选点，用于观察非唯一性和 y-h tradeoff。
+        top_k=8,
+        # uncertainty_threshold: 用 max_score * 阈值 定义不确定性范围。
+        # 值越高范围越窄，但可能低估受限孔径下的真实不确定性。
+        uncertainty_threshold=0.92,
     ),
     wavefield=dict(
+        wavefield_view="plan",             # plan: x-y 地表平面运动学示意；3d: 三维等时面几何示意，仍不是 elastic3d。
         wavefield_mode="single-shot",      # single-shot 只看一炮；multi-shot 顺序展示多炮覆盖。
         wavefield_shot_index=None,         # 单炮模式指定炮号；None 时自动选靠近主异常体的炮。
         wavefield_shot_indices="0,5,10",   # 多炮显式炮号，如 "0,5,10"；非空时优先。
@@ -132,20 +219,39 @@ LOCAL_WORKFLOW = dict(
 )
 
 LOCAL_ELASTIC3D = dict(
+    # nx/ny/nz: elastic3d 小模型网格数。物理范围约为
+    # (nx*dx, ny*dy, nz*dz)，不等同于 workflow 的 road_length/road_width。
+    # 如果把道路尺度异常体直接传入 elastic3d，必须检查坐标是否落在该小模型内。
     nx=56,
     ny=36,
     nz=28,
+    # dx/dy/dz: 三维网格间距，单位 m；越小空间分辨率越高，但 CFL 更严格、计算更慢。
     dx=0.5,
     dy=0.5,
     dz=0.5,
+    # elastic_dt: 时间步长，单位 s；必须满足 CFL = vmax*dt*sqrt(1/dx^2+1/dy^2+1/dz^2)。
     elastic_dt=0.00012,
+    # elastic_nt: 时间步数；越大记录越长，但计算更慢，也更容易看到边界反射。
     elastic_nt=420,
+    # elastic3d 内部当前使用三层 Vp/Vs/rho 教学模型：
+    # Vp≈520/720/900 m/s，Vs≈220/320/420 m/s，rho≈1800/1900/2050 kg/m3。
+    # 这些不是 workflow 的等效瑞雷速度 VR；二者属于不同正演层级。
+    # elastic_source_frequency: Ricker 垂向锤击源主频，单位 Hz；越高波长越短、数值频散要求越严格。
     elastic_source_frequency=60.0,
+    # elastic_source_amplitude: 速度场中加载的等效垂向力源幅度；过大会导致图件饱和或数值异常。
     elastic_source_amplitude=1.0e5,
-    elastic_space_order=2,             # 2 或 4；四阶更低数值频散但边界仍降阶。
-    elastic_abc="sponge",              # "sponge" 或 "cpml"；cpml 当前为 experimental cpml-like。
-    elastic_record_component="vz",     # "vz", "vx", "strain_xx", "strain_rate_xx"。
-    elastic_gauge_length=1.0,           # DAS 近似 gauge length，单位 m。
+    # elastic_space_order: 空间差分阶数。2 阶更稳更快；4 阶内部频散较低，边界附近仍会降阶。
+    elastic_space_order=2,
+    # elastic_abc: 吸收边界。sponge 是默认稳定海绵层；cpml 是 experimental cpml-like 阻尼，
+    # 不是完整带记忆变量的严格 CPML，不应作为工业级边界吸收结论。
+    elastic_abc="sponge",
+    # elastic_record_component: 接收记录分量。vz/vx 是速度；strain_xx≈du_x/dx；
+    # strain_rate_xx≈dv_x/dx，是沿 x 方向光纤 DAS 应变率的粗略近似。
+    elastic_record_component="vz",
+    # elastic_gauge_length: DAS 近似 gauge length，单位 m；用于应变/应变率的有限长度差分。
+    elastic_gauge_length=1.0,
+    # elastic3d 默认异常体来自 workflow 的 Cavity 参数；它会被映射为低速低密度体。
+    # 由于 elastic3d 是小网格，务必确认 anomaly_x/y/z 和 radius 落入 nx*dx, ny*dy, nz*dz 范围。
 )
 
 LOCAL_FWI = dict(
@@ -370,6 +476,7 @@ def add_animation_args(parser: argparse.ArgumentParser) -> None:
 def add_wavefield_args(parser: argparse.ArgumentParser) -> None:
     """等效运动学波场示意参数。"""
 
+    parser.add_argument("--wavefield-view", choices=["plan", "3d"], default="plan", help="波场视图。plan 为默认 x-y 地表平面运动学示意；3d 为三维等时面/等时球面几何示意，仍不是完整弹性波场。")
     parser.add_argument("--wavefield-mode", choices=["single-shot", "multi-shot"], default="single-shot", help="波场示意模式。single-shot 只展示一炮；multi-shot 顺序展示多炮覆盖，但仍只是传播示意，不是联合反演。")
     parser.add_argument("--wavefield-shot-index", type=int, default=None, help="single-shot 使用的炮号；不设时自动选择靠近主异常体的炮。")
     parser.add_argument("--wavefield-shot-indices", default="", help="multi-shot 显式炮号列表，例如 0,5,10；非空时优先于 --wavefield-shot-step。")
@@ -846,6 +953,7 @@ def run_wavefield(args: argparse.Namespace) -> None:
     shot_index = shot_indices[0]
     animate = bool(args.animate) and not bool(args.no_animate)
     print(f"wavefield 使用速度: velocity_mode={cfg.velocity.velocity_model_type}, VR={cfg.velocity.rayleigh_velocity:.1f} m/s, VR_eff={vr_eff:.1f} m/s")
+    print(f"wavefield-view = {args.wavefield_view}；plan 为 x-y 地表平面示意，3d 为三维等时面几何示意。")
     if cfg.velocity.velocity_model_type == "layered-effective":
         print("说明：layered-effective 只折算 VR_eff；x-y 波场仍是等效运动学示意，不伪造成严格分层介质波场。")
     else:
@@ -859,7 +967,57 @@ def run_wavefield(args: argparse.Namespace) -> None:
         velocity_info=velocity_info,
         **opts,
     )
-    if getattr(args, "wavefield_mode", "single-shot") == "multi-shot":
+    if args.wavefield_view == "3d":
+        if getattr(args, "wavefield_mode", "single-shot") == "multi-shot":
+            print("提醒：3d + multi-shot 当前只输出所选第一炮的三维关键帧/GIF；多炮覆盖建议使用 plan 视图。")
+        if animate:
+            frame_outputs = plot_kinematic_wavefield_frames_3d(
+                geom,
+                cavities,
+                shot_index,
+                vr_eff,
+                outdir,
+                t0=cfg.record.t0,
+                save=bool(opts["save"]),
+                show=bool(opts["show"]),
+                dpi=int(opts["dpi"]),
+                velocity_info=velocity_info,
+                filename_prefix="06_wavefield_3d",
+            )
+            for output in frame_outputs:
+                manifest.add(output)
+            animate_kinematic_wavefield_3d(
+                geom,
+                cavities,
+                shot_index,
+                vr_eff,
+                manifest.add(outdir / "06_wavefield_3d.gif"),
+                t0=cfg.record.t0,
+                n_frames=args.frames,
+                fps=args.fps,
+                save=bool(opts["save"]),
+                show=bool(opts["show"]),
+                velocity_info=velocity_info,
+            )
+            print("已生成 06_wavefield_3d_frame_*.png 和 06_wavefield_3d.gif：三维运动学等时面示意，不是完整弹性波场。")
+        else:
+            frame_outputs = plot_kinematic_wavefield_frames_3d(
+                geom,
+                cavities,
+                shot_index,
+                vr_eff,
+                outdir,
+                t0=cfg.record.t0,
+                save=bool(opts["save"]),
+                show=bool(opts["show"]),
+                dpi=int(opts["dpi"]),
+                velocity_info=velocity_info,
+                filename_prefix="06_wavefield_3d",
+            )
+            for output in frame_outputs:
+                manifest.add(output)
+            print("未启用 --animate：已输出/显示三张 3D 运动学等时面关键帧。")
+    elif getattr(args, "wavefield_mode", "single-shot") == "multi-shot":
         print(f"multi-shot wavefield 选择炮号: {shot_indices}")
         if animate:
             animate_multishot_kinematic_wavefield(
@@ -1176,49 +1334,28 @@ def run_workflow(args: argparse.Namespace) -> None:
     print("\nStep 6：可选运动学波场动画。")
     animate = bool(args.animate) and not bool(args.no_animate)
     if animate and cavities:
-        plot_kinematic_wavefield_frames(
-            geom,
-            cavities,
-            shot_index,
-            vr_eff,
-            outdir,
-            t0=cfg.record.t0,
-            save=bool(opts["save"]),
-            show=bool(opts["show"]),
-            dpi=int(opts["dpi"]),
-            velocity_info=velocity_plot_info(cfg),
-            filename_prefix="06_wavefield",
-        )
-        for frame_name in (
-            "06_wavefield_frame_early.png",
-            "06_wavefield_frame_hit_cavity.png",
-            "06_wavefield_frame_scattered.png",
-        ):
-            manifest.add(outdir / frame_name)
-        if getattr(args, "wavefield_mode", "single-shot") == "multi-shot":
-            shot_indices = select_wavefield_shots(args, geom, cavities)
-            animate_multishot_kinematic_wavefield(
-                geom,
-                cavities,
-                shot_indices,
-                vr_eff,
-                manifest.add(outdir / "06_multishot_wavefield.gif"),
-                t0=cfg.record.t0,
-                n_frames=args.frames,
-                fps=args.fps,
-                shot_interval=args.wavefield_shot_interval,
-                save=bool(opts["save"]),
-                show=False,
-                velocity_info=velocity_plot_info(cfg),
-            )
-            print("已生成 06_wavefield_frame_*.png 和 06_multishot_wavefield.gif。该动画是多炮顺序激发示意，不是多炮联合反演。")
-        else:
-            animate_kinematic_wavefield(
+        if args.wavefield_view == "3d":
+            frame_outputs = plot_kinematic_wavefield_frames_3d(
                 geom,
                 cavities,
                 shot_index,
                 vr_eff,
-                manifest.add(outdir / "06_kinematic_wavefield.gif"),
+                outdir,
+                t0=cfg.record.t0,
+                save=bool(opts["save"]),
+                show=bool(opts["show"]),
+                dpi=int(opts["dpi"]),
+                velocity_info=velocity_plot_info(cfg),
+                filename_prefix="06_wavefield_3d",
+            )
+            for output in frame_outputs:
+                manifest.add(output)
+            animate_kinematic_wavefield_3d(
+                geom,
+                cavities,
+                shot_index,
+                vr_eff,
+                manifest.add(outdir / "06_wavefield_3d.gif"),
                 t0=cfg.record.t0,
                 n_frames=args.frames,
                 fps=args.fps,
@@ -1226,7 +1363,59 @@ def run_workflow(args: argparse.Namespace) -> None:
                 show=False,
                 velocity_info=velocity_plot_info(cfg),
             )
-            print("已生成 06_wavefield_frame_*.png 和 06_kinematic_wavefield.gif。该动画是等效运动学传播示意，不是严格弹性波场快照。")
+            print("已生成 06_wavefield_3d_frame_*.png 和 06_wavefield_3d.gif。该图是三维运动学等时面示意，不是完整弹性波场。")
+        else:
+            plot_kinematic_wavefield_frames(
+                geom,
+                cavities,
+                shot_index,
+                vr_eff,
+                outdir,
+                t0=cfg.record.t0,
+                save=bool(opts["save"]),
+                show=bool(opts["show"]),
+                dpi=int(opts["dpi"]),
+                velocity_info=velocity_plot_info(cfg),
+                filename_prefix="06_wavefield",
+            )
+            for frame_name in (
+                "06_wavefield_frame_early.png",
+                "06_wavefield_frame_hit_cavity.png",
+                "06_wavefield_frame_scattered.png",
+            ):
+                manifest.add(outdir / frame_name)
+            if getattr(args, "wavefield_mode", "single-shot") == "multi-shot":
+                shot_indices = select_wavefield_shots(args, geom, cavities)
+                animate_multishot_kinematic_wavefield(
+                    geom,
+                    cavities,
+                    shot_indices,
+                    vr_eff,
+                    manifest.add(outdir / "06_multishot_wavefield.gif"),
+                    t0=cfg.record.t0,
+                    n_frames=args.frames,
+                    fps=args.fps,
+                    shot_interval=args.wavefield_shot_interval,
+                    save=bool(opts["save"]),
+                    show=False,
+                    velocity_info=velocity_plot_info(cfg),
+                )
+                print("已生成 06_wavefield_frame_*.png 和 06_multishot_wavefield.gif。该动画是多炮顺序激发示意，不是多炮联合反演。")
+            else:
+                animate_kinematic_wavefield(
+                    geom,
+                    cavities,
+                    shot_index,
+                    vr_eff,
+                    manifest.add(outdir / "06_kinematic_wavefield.gif"),
+                    t0=cfg.record.t0,
+                    n_frames=args.frames,
+                    fps=args.fps,
+                    save=bool(opts["save"]),
+                    show=False,
+                    velocity_info=velocity_plot_info(cfg),
+                )
+                print("已生成 06_wavefield_frame_*.png 和 06_kinematic_wavefield.gif。该动画是 x-y 平面运动学示意，不是严格弹性波场快照。")
     else:
         print("未生成动画。如需生成等效波场动图，请运行：")
         print("python main.py workflow --animate --save")
