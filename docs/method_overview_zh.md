@@ -213,7 +213,7 @@ wavefield 图件也遵循同一速度逻辑：`uniform` 使用 `VR`，`layered-e
 
 multi-shot wavefield 只是把多个炮点按顺序激发出来，帮助理解多炮覆盖范围和炮点位置变化。真正参与定位的是 `scan-mode=joint` 的多炮联合评分；multi-shot wavefield 不是多炮联合反演。
 
-直接在 VSCode 运行 `main.py` 时，`LOCAL_*_PARAMS` 会先统一转换成 `RoadVoidConfig`，再供几何、正演、波场、路径和扫描共用。这样修改道路宽度、异常体位置或速度模式后，各步骤应保持一致；若扫描范围未覆盖异常体或记录长度不足，程序会在控制台给出 warning。
+直接在 VSCode 运行 `main.py` 时，顶部的 `LOCAL_OUTPUT` 和 `LOCAL_WORKFLOW` 会先统一转换成 `RoadVoidConfig`，再供几何、正演、波场、路径和扫描共用。这样修改道路宽度、异常体位置或速度模式后，各步骤应保持一致；若扫描范围未覆盖异常体或记录长度不足，程序会在控制台给出 warning。默认 workflow 与 wavefield 第 6 步结果都写入 `outputs/workflow/`，不再维护单独的 `outputs/local_debug/` 或 `outputs/wavefield/` 输出体系。
 
 ## 7. 小尺度 3D elastic FDTD 原型
 

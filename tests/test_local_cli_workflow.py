@@ -42,43 +42,51 @@ def test_local_debug_config_builds_workflow_args():
     args = build_args_from_local_config("workflow")
     assert args.command == "workflow"
     assert hasattr(args, "road_width")
+    assert args.outdir == "outputs/workflow"
+    assert main.LOCAL_OUTPUT["outdir"] != "outputs/local_debug"
+
+
+def test_wavefield_default_outdir_is_workflow_tree():
+    parser = build_parser()
+    args = parser.parse_args(["wavefield", "--save"])
+    assert main.command_outdir(args, "wavefield") == Path("outputs/workflow")
 
 
 def test_local_debug_config_builds_scan_args():
     args = build_args_from_local_config("scan")
     assert args.command == "scan"
-    assert args.scan_mode == main.LOCAL_SCAN_PARAMS["scan_mode"]
+    assert args.scan_mode == main.LOCAL_WORKFLOW["scan"]["scan_mode"]
 
 
 def test_local_debug_config_builds_elastic3d_args():
     args = build_args_from_local_config("elastic3d")
     assert args.command == "elastic3d"
-    assert args.elastic_space_order == main.LOCAL_ELASTIC3D_PARAMS["elastic_space_order"]
+    assert args.elastic_space_order == main.LOCAL_ELASTIC3D["elastic_space_order"]
 
 
 def test_local_debug_config_builds_numerics_args():
     args = build_args_from_local_config("numerics-demo")
     assert args.command == "numerics-demo"
-    assert args.method == main.LOCAL_NUMERICS_PARAMS["method"]
+    assert args.method == main.LOCAL_NUMERICS["method"]
 
 
 def test_local_debug_config_builds_numerics_compare_args():
     args = build_args_from_local_config("numerics-compare")
     assert args.command == "numerics-compare"
-    assert args.numerics_velocity == main.LOCAL_NUMERICS_COMPARE_PARAMS["numerics_velocity"]
+    assert args.numerics_velocity == main.LOCAL_NUMERICS_COMPARE["numerics_velocity"]
 
 
 def test_local_geometry_velocity_anomaly_flow_into_single_config():
     args = build_args_from_local_config("workflow")
     cfg = build_road_void_config_from_args(args)
     cavities = cfg.to_cavities()
-    assert cfg.geometry.road_width == main.LOCAL_GEOMETRY_PARAMS["road_width"]
-    assert cfg.geometry.road_length == main.LOCAL_GEOMETRY_PARAMS["road_length"]
-    assert cfg.velocity.velocity_model_type == main.LOCAL_VELOCITY_PARAMS["velocity_mode"]
+    assert cfg.geometry.road_width == main.LOCAL_WORKFLOW["geometry"]["road_width"]
+    assert cfg.geometry.road_length == main.LOCAL_WORKFLOW["geometry"]["road_length"]
+    assert cfg.velocity.velocity_model_type == main.LOCAL_WORKFLOW["velocity"]["velocity_mode"]
     assert cavities
-    if not main.LOCAL_ANOMALY_PARAMS.get("anomalies"):
-        assert cavities[0].shape == main.LOCAL_ANOMALY_PARAMS["cavity_shape"]
-        assert cavities[0].x0 == main.LOCAL_ANOMALY_PARAMS["cavity_x"]
+    if not main.LOCAL_WORKFLOW["anomaly"].get("anomalies"):
+        assert cavities[0].shape == main.LOCAL_WORKFLOW["anomaly"]["cavity_shape"]
+        assert cavities[0].x0 == main.LOCAL_WORKFLOW["anomaly"]["cavity_x"]
 
 
 def test_single_cylinder_args_flow_to_config_and_geometry():
@@ -199,7 +207,7 @@ def test_wavefield_animate_save_generates_gif():
     outdir = Path(".tmp_test_outputs/wavefield_gif")
     completed = _run_cli("wavefield", "--animate", "--save", "--frames", "3", "--outdir", str(outdir))
     assert completed.returncode == 0
-    assert (outdir / "kinematic_wavefield.gif").exists()
+    assert (outdir / "06_kinematic_wavefield.gif").exists()
 
 
 def test_wavefield_save_generates_physical_key_frames():
@@ -208,10 +216,10 @@ def test_wavefield_save_generates_physical_key_frames():
     assert "early: 直达波刚离开震源" in completed.stdout
     assert "hit_cavity" in completed.stdout
     assert "scattered" in completed.stdout
-    assert (outdir / "wavefield_frame_early.png").exists()
-    assert (outdir / "wavefield_frame_hit_cavity.png").exists()
-    assert (outdir / "wavefield_frame_scattered.png").exists()
-    assert (outdir / "wavefield_velocity_context.png").exists()
+    assert (outdir / "06_wavefield_frame_early.png").exists()
+    assert (outdir / "06_wavefield_frame_hit_cavity.png").exists()
+    assert (outdir / "06_wavefield_frame_scattered.png").exists()
+    assert (outdir / "06_wavefield_velocity_context.png").exists()
     assert (outdir / "output_manifest.txt").exists()
 
 
@@ -265,7 +273,7 @@ def test_main_tutorial_no_save_is_compact():
 def test_workflow_no_save_does_not_run_sensitivity_or_animation():
     completed = _run_cli("workflow", "--no-save")
     assert "parameter_sensitivity_results.csv" not in completed.stdout
-    assert "06_kinematic_wavefield.gif" in completed.stdout
+    assert "输出写入 outputs/workflow" in completed.stdout
     assert "未生成动画" in completed.stdout
 
 
@@ -299,6 +307,8 @@ def test_workflow_default_saved_png_count_is_controlled():
         "05_scan_score_slices.png",
     ]
     assert not (outdir / "single_shot_vs_joint.png").exists()
+    assert not any(p.name.startswith("06_wavefield") for p in outdir.glob("*.png"))
+    assert not (outdir / "06_kinematic_wavefield.gif").exists()
     assert (outdir / "output_manifest.txt").exists()
 
 
@@ -328,9 +338,9 @@ def test_multishot_wavefield_static_outputs_are_limited():
         str(outdir),
     )
     assert "multi-shot wavefield 选择炮号" in completed.stdout
-    frames = sorted(outdir.glob("multishot_frame_shot*.png"))
+    frames = sorted(outdir.glob("06_multishot_frame_shot*.png"))
     assert len(frames) == 3
-    assert not (outdir / "multishot_kinematic_wavefield.gif").exists()
+    assert not (outdir / "06_multishot_wavefield.gif").exists()
 
 
 def test_multishot_wavefield_animate_generates_single_gif():
@@ -350,7 +360,37 @@ def test_multishot_wavefield_animate_generates_single_gif():
         str(outdir),
     )
     assert completed.returncode == 0
-    assert (outdir / "multishot_kinematic_wavefield.gif").exists()
+    assert (outdir / "06_multishot_wavefield.gif").exists()
+
+
+def test_workflow_animate_generates_step6_outputs_only_when_requested():
+    outdir = Path(".tmp_test_outputs/workflow_animate")
+    completed = _run_cli(
+        "workflow",
+        "--animate",
+        "--frames",
+        "4",
+        "--save",
+        "--clean-output",
+        "--outdir",
+        str(outdir),
+        "--scan-x-step",
+        "6",
+        "--scan-y-step",
+        "4",
+        "--scan-h-step",
+        "1.6",
+        "--scan-vr-step",
+        "40",
+    )
+    assert completed.returncode == 0
+    assert (outdir / "06_wavefield_frame_early.png").exists()
+    assert (outdir / "06_wavefield_frame_hit_cavity.png").exists()
+    assert (outdir / "06_wavefield_frame_scattered.png").exists()
+    assert (outdir / "06_kinematic_wavefield.gif").exists()
+    manifest_text = (outdir / "output_manifest.txt").read_text(encoding="utf-8")
+    assert "06_wavefield_frame_early.png" in manifest_text
+    assert "06_kinematic_wavefield.gif" in manifest_text
 
 
 def test_workflow_and_scan_share_parameter_mapping():

@@ -721,6 +721,7 @@ def plot_kinematic_wavefield_frames(
     show: bool = False,
     dpi: int = 180,
     velocity_info: dict[str, object] | None = None,
+    filename_prefix: str = "",
 ) -> None:
     """输出等效运动学波场的三个关键静态帧。
 
@@ -733,13 +734,16 @@ def plot_kinematic_wavefield_frames(
     outdir = Path(outdir)
     frame_times = _wavefield_frame_times(geometry, cavities, source_index, velocity, t0)
     for filename, frame_time in frame_times.items():
+        output_name = filename
+        if filename_prefix:
+            output_name = filename.replace("wavefield_", f"{filename_prefix}_", 1)
         _plot_single_wavefield_frame(
             geometry,
             cavities,
             source_index,
             velocity,
             frame_time,
-            outdir / filename,
+            outdir / output_name,
             t0=t0,
             save=save,
             show=show,
@@ -801,6 +805,7 @@ def plot_multishot_wavefield_frames(
     show: bool = False,
     dpi: int = 180,
     velocity_info: dict[str, object] | None = None,
+    filename_prefix: str = "multishot_frame",
 ) -> list[Path]:
     """输出少量多炮波场关键帧。
 
@@ -814,7 +819,7 @@ def plot_multishot_wavefield_frames(
     written: list[Path] = []
     for shot_index in shot_indices:
         frame_time = _wavefield_frame_times(geometry, cavities, shot_index, velocity, t0)["wavefield_frame_scattered.png"]
-        output = outdir / f"multishot_frame_shot{shot_index:03d}.png"
+        output = outdir / f"{filename_prefix}_shot{shot_index:03d}.png"
         _plot_single_wavefield_frame(
             geometry,
             cavities,

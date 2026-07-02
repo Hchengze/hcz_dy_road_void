@@ -43,16 +43,12 @@ from road_void.workflow import run_location_workflow, simulate_from_config
 
 
 # ============================================================
-# 本地调试配置区：适合在 VSCode 中直接点击运行 main.py
+# VSCode 本地运行配置：默认运行完整 workflow
 # ============================================================
 #
-# 使用规则：
-# 1. 直接运行 ``python main.py`` 且 USE_LOCAL_DEBUG_CONFIG=True 时，会读取
-#    LOCAL_RUN_MODE 和下面这些 LOCAL_* 参数。
-# 2. 如果显式输入命令行子命令，例如 ``python main.py scan --no-save``，
-#    则优先使用 argparse 命令行参数，不受这里影响。
-# 3. 这里不是新的配置系统，只是为了本地算法研究时少敲命令行。
-
+# 这个区域是本地算法研究的“唯一常用配置入口”。直接运行 ``python main.py``
+# 时会读取 LOCAL_RUN_MODE、LOCAL_OUTPUT 和 LOCAL_WORKFLOW；如果显式输入
+# ``python main.py scan --no-save`` 等命令行参数，则仍然优先使用 argparse。
 USE_LOCAL_DEBUG_CONFIG = True
 
 # 可选模式："workflow", "geometry", "forward", "velocity", "wavefield",
@@ -60,76 +56,82 @@ USE_LOCAL_DEBUG_CONFIG = True
 # "numerics-demo", "numerics-compare", "all"。
 LOCAL_RUN_MODE = "workflow"
 
-# 输出控制。VSCode 中想弹窗看图可把 LOCAL_SHOW 改为 True；批量烟测建议 False。
-LOCAL_SHOW = False
-LOCAL_SAVE = True
-LOCAL_ANIMATE = True
-LOCAL_OUTDIR = "outputs/local_debug"
-LOCAL_DPI = 150
-
-LOCAL_GEOMETRY_PARAMS = dict(
-    road_width=150.0,       # 道路横向宽度 W，单位 m；控制锤击线到光纤线的横向孔径。
-    road_length=180.0,      # 沿道路模拟长度，单位 m；需覆盖通道、炮点和异常体。
-    channel_spacing=1.0,   # DAS 通道间距，单位 m；越小沿 x 采样越密。
-    source_spacing=4.0,    # 锤击点距，单位 m；越小多炮约束越强但采集工作量越大。
+LOCAL_OUTPUT = dict(
+    save=True,              # True 时保存 workflow 主线图件；False 时只跑流程和控制台摘要。
+    show=False,             # True 时弹出 matplotlib 窗口，适合手动看图调参。
+    animate=False,          # True 时才生成 GIF；默认关闭，避免输出过多。
+    save_extra=False,       # True 才保存诊断图、run_parameters 等额外文件。
+    clean_output=True,      # True 时只清理当前 outdir 中旧图，不碰其它输出目录。
+    outdir="outputs/workflow",
+    dpi=150,
 )
 
-LOCAL_VELOCITY_PARAMS = dict(
-    rayleigh_velocity=240.0,          # 等效瑞雷波速度 VR，单位 m/s。
-    source_frequency=35.0,            # 锤击主频 f，单位 Hz；lambda=VR/f。
-    velocity_mode="layered-effective",          # "uniform" 或 "layered-effective"。
-    layer_depths="0.4,1.5,4.0",       # 层底深度，单位 m；layered-effective 使用。
-    layer_velocities="180,240,320",   # 每层等效瑞雷速度，单位 m/s。
-    sensitivity_depth_factor=0.5,     # z_sensitive≈alpha*lambda。
+LOCAL_WORKFLOW = dict(
+    geometry=dict(
+        road_width=24.0,       # 道路横向宽度 W，单位 m；控制锤击线到光纤线的横向孔径。
+        road_length=80.0,      # 沿道路模拟长度，单位 m；需覆盖通道、炮点和异常体。
+        channel_spacing=1.0,   # DAS 通道间距，单位 m；越小沿 x 采样越密。
+        source_spacing=4.0,    # 锤击点距，单位 m；越小多炮约束越强但采集工作量越大。
+    ),
+    velocity=dict(
+        rayleigh_velocity=240.0,          # 等效瑞雷波速度 VR，单位 m/s。
+        source_frequency=35.0,            # 锤击主频 f，单位 Hz；lambda=VR/f。
+        velocity_mode="layered-effective",# "uniform" 或 "layered-effective"。
+        layer_depths="0.4,1.5,4.0",       # 层底深度，单位 m；layered-effective 使用。
+        layer_velocities="180,240,320",   # 每层等效瑞雷速度，单位 m/s。
+        sensitivity_depth_factor=0.5,     # z_sensitive≈alpha*lambda。
+    ),
+    anomaly=dict(
+        enable_cavity=True,          # False 时等价于命令行 --no-cavity，用于无异常误报检查。
+        cavity_x=42.0,               # 单异常体 x0，单位 m；主要控制绕射顶点沿道路位置。
+        cavity_y=8.5,                # 单异常体 y0，单位 m；单侧 DAS 下与深度 h 存在耦合。
+        cavity_depth=2.2,            # 单异常体顶部/主散射中心深度 h，单位 m。
+        cavity_radius=2.0,           # sphere/cylinder 默认半径，单位 m；也作为 line/zone 的辅助尺度。
+        cavity_shape="sphere",       # sphere/box/cylinder/ellipsoid/line/zone。
+        cavity_size_x=4.0,           # box/ellipsoid 的 x 向尺寸；line/zone 的长度；单位 m。
+        cavity_size_y=3.0,           # box/ellipsoid/zone 的 y 向尺寸；单位 m。
+        cavity_size_z=2.0,           # box/ellipsoid/cylinder 的竖向尺寸或高度；单位 m。
+        cavity_azimuth=0.0,          # line/zone 方位角，单位度；0 表示沿 x 方向。
+        scattering_strength=1.0,     # 散射强度；越大绕射/散射事件越明显。
+        attenuation_strength=0.25,   # 阴影/衰减强度；越大直达波局部能量下降越明显。
+        tail_strength=0.2,           # 散射尾波强度；越大尾波更长，但过大会掩盖主事件。
+        anomalies="",                # 非空时优先使用多异常体字符串，忽略上面的单异常体参数。
+    ),
+    noise=dict(
+        noise_level=0.03,
+        traffic_noise_level=0.015,
+        bad_channel_fraction=0.02,
+        weak_coupling_fraction=0.06,
+        coupling_variation=0.08,
+    ),
+    scan=dict(
+        scan_mode="joint",          # "joint", "single-shot", "compare"。
+        shot_index=5,               # single-shot 模式使用的炮号。
+        shot_weight_mode="uniform", # "uniform", "near-cavity", "snr"。
+        scan_x_min=20.0,
+        scan_x_max=70.0,
+        scan_x_step=2.0,
+        scan_y_min=2.0,
+        scan_y_max=22.0,
+        scan_y_step=2.0,
+        scan_h_min=0.5,
+        scan_h_max=5.0,
+        scan_h_step=0.3,
+        scan_vr_min=220.0,
+        scan_vr_max=260.0,
+        scan_vr_step=10.0,
+    ),
+    wavefield=dict(
+        wavefield_mode="single-shot",      # single-shot 只看一炮；multi-shot 顺序展示多炮覆盖。
+        wavefield_shot_index=None,         # 单炮模式指定炮号；None 时自动选靠近主异常体的炮。
+        wavefield_shot_indices="0,5,10",   # 多炮显式炮号，如 "0,5,10"；非空时优先。
+        wavefield_max_shots=5,             # 多炮最多展示几炮，避免 GIF 过大。
+        wavefield_shot_step=5,             # 未指定 indices 时，每隔几炮选一炮。
+        wavefield_shot_interval=0.25,      # 多炮 GIF 的示意全局时间间隔，单位 s。
+    ),
 )
 
-LOCAL_ANOMALY_PARAMS = dict(
-    enable_cavity=True,          # False 时等价于命令行 --no-cavity，用于无异常误报检查。
-    cavity_x=42.0,               # 单异常体 x0，单位 m；主要控制绕射顶点沿道路位置。
-    cavity_y=8.5,                # 单异常体 y0，单位 m；单侧 DAS 下与深度 h 存在耦合。
-    cavity_depth=2.2,            # 单异常体顶部/主散射中心深度 h，单位 m。
-    cavity_radius=2.0,           # sphere/cylinder 默认半径，单位 m；也作为 line/zone 的辅助尺度。
-    cavity_shape="sphere",       # sphere/box/cylinder/ellipsoid/line/zone。
-    cavity_size_x=4.0,           # box/ellipsoid 的 x 向尺寸；line/zone 的长度；单位 m。
-    cavity_size_y=3.0,           # box/ellipsoid/zone 的 y 向尺寸；单位 m。
-    cavity_size_z=2.0,           # box/ellipsoid/cylinder 的竖向尺寸或高度；单位 m。
-    cavity_azimuth=0.0,          # line/zone 方位角，单位度；0 表示沿 x 方向。
-    scattering_strength=1.0,     # 散射强度；越大绕射/散射事件越明显。
-    attenuation_strength=0.25,   # 阴影/衰减强度；越大直达波局部能量下降越明显。
-    tail_strength=0.2,           # 散射尾波强度；越大尾波更长，但过大会掩盖主事件。
-    # 多异常体格式示例：
-    # "sphere:42,8.5,2.2,2.0,1.0;box:58,6,1.5,4,3,1,0.8"
-    # 若这里非空，则优先使用该字符串，忽略上面的单异常体参数。
-    anomalies="",
-)
-
-LOCAL_NOISE_PARAMS = dict(
-    noise_level=0.03,
-    traffic_noise_level=0.015,
-    bad_channel_fraction=0.02,
-    weak_coupling_fraction=0.06,
-    coupling_variation=0.08,
-)
-
-LOCAL_SCAN_PARAMS = dict(
-    scan_mode="joint",          # "joint", "single-shot", "compare"。
-    shot_index=5,               # single-shot 模式使用的炮号。
-    shot_weight_mode="uniform", # "uniform", "near-cavity", "snr"。
-    scan_x_min=32.0,
-    scan_x_max=52.0,
-    scan_x_step=1.0,
-    scan_y_min=3.0,
-    scan_y_max=14.0,
-    scan_y_step=1.0,
-    scan_h_min=0.8,
-    scan_h_max=4.0,
-    scan_h_step=0.4,
-    scan_vr_min=220.0,
-    scan_vr_max=260.0,
-    scan_vr_step=10.0,
-)
-
-LOCAL_ELASTIC3D_PARAMS = dict(
+LOCAL_ELASTIC3D = dict(
     nx=56,
     ny=36,
     nz=28,
@@ -146,20 +148,20 @@ LOCAL_ELASTIC3D_PARAMS = dict(
     elastic_gauge_length=1.0,           # DAS 近似 gauge length，单位 m。
 )
 
-LOCAL_FWI_PARAMS = dict(
+LOCAL_FWI = dict(
     fwi_vs_scales="0.86,0.92,0.98,1.0,1.04",
     fwi_observed_vs_scale=1.0,
     fwi_initial_vs_scale=0.9,
 )
 
-LOCAL_NUMERICS_PARAMS = dict(
+LOCAL_NUMERICS = dict(
     method="all",          # "fem", "sem", "bem", "all"。
     numerics_length=100.0, # 1D FEM/SEM 标量波模型长度，单位 m。
     numerics_velocity=300.0,
     numerics_duration=0.24,
 )
 
-LOCAL_NUMERICS_COMPARE_PARAMS = dict(
+LOCAL_NUMERICS_COMPARE = dict(
     numerics_length=100.0,             # 统一 1D 标量波 benchmark 长度，单位 m。
     numerics_velocity=300.0,           # 三种方法使用同一标量波速度，单位 m/s。
     numerics_duration=0.24,            # 记录时长，单位 s；短时避免固定边界反射主导。
@@ -168,16 +170,6 @@ LOCAL_NUMERICS_COMPARE_PARAMS = dict(
     numerics_receiver_position=75.0,   # 接收点位置，单位 m。
     numerics_source_frequency=35.0,    # Ricker 源主频，单位 Hz。
 )
-
-LOCAL_WAVEFIELD_PARAMS = dict(
-    wavefield_mode="single-shot",      # single-shot 只看一炮；multi-shot 顺序展示多炮覆盖。
-    wavefield_shot_index=None,         # 单炮模式指定炮号；None 时自动选靠近主异常体的炮。
-    wavefield_shot_indices="",         # 多炮显式炮号，如 "0,5,10"；非空时优先。
-    wavefield_max_shots=5,             # 多炮最多展示几炮，避免 GIF 过大。
-    wavefield_shot_step=5,             # 未指定 indices 时，每隔几炮选一炮。
-    wavefield_shot_interval=0.25,      # 多炮 GIF 的示意全局时间间隔，单位 s。
-)
-
 
 WORKFLOW_STEPS = [
     ("geometry", "建立道路三维几何：道路、光纤、炮线、空洞"),
@@ -204,23 +196,23 @@ def build_args_from_local_config(run_mode: str | None = None) -> argparse.Namesp
 
 def _local_config_to_argv(mode: str) -> list[str]:
     params: dict[str, object] = {}
-    params.update(LOCAL_GEOMETRY_PARAMS)
-    params.update(LOCAL_VELOCITY_PARAMS)
-    params.update(LOCAL_ANOMALY_PARAMS)
-    params.update(LOCAL_NOISE_PARAMS)
+    params.update(LOCAL_WORKFLOW["geometry"])
+    params.update(LOCAL_WORKFLOW["velocity"])
+    params.update(LOCAL_WORKFLOW["anomaly"])
+    params.update(LOCAL_WORKFLOW["noise"])
     if mode in {"workflow", "scan", "sensitivity", "tutorial", "all"}:
-        params.update(LOCAL_SCAN_PARAMS)
+        params.update(LOCAL_WORKFLOW["scan"])
     if mode in {"workflow", "wavefield", "tutorial", "all"}:
-        params.update(LOCAL_WAVEFIELD_PARAMS)
+        params.update(LOCAL_WORKFLOW["wavefield"])
     if mode == "elastic3d":
-        params.update(LOCAL_ELASTIC3D_PARAMS)
+        params.update(LOCAL_ELASTIC3D)
     if mode == "fwi-demo":
-        params.update(LOCAL_ELASTIC3D_PARAMS)
-        params.update(LOCAL_FWI_PARAMS)
+        params.update(LOCAL_ELASTIC3D)
+        params.update(LOCAL_FWI)
     if mode == "numerics-demo":
-        params.update(LOCAL_NUMERICS_PARAMS)
+        params.update(LOCAL_NUMERICS)
     if mode == "numerics-compare":
-        params.update(LOCAL_NUMERICS_COMPARE_PARAMS)
+        params.update(LOCAL_NUMERICS_COMPARE)
 
     argv = [mode]
     for key, value in params.items():
@@ -236,17 +228,21 @@ def _local_config_to_argv(mode: str) -> list[str]:
                 argv.append(flag)
         else:
             argv.extend([flag, str(value)])
-    if LOCAL_SAVE:
+    if bool(LOCAL_OUTPUT["save"]):
         argv.append("--save")
     else:
         argv.append("--no-save")
-    if LOCAL_SHOW:
+    if bool(LOCAL_OUTPUT["show"]):
         argv.append("--show")
     else:
         argv.append("--no-show")
-    if LOCAL_ANIMATE and mode in {"workflow", "wavefield", "tutorial", "elastic3d", "all"}:
+    if bool(LOCAL_OUTPUT["animate"]) and mode in {"workflow", "wavefield", "tutorial", "elastic3d", "all"}:
         argv.append("--animate")
-    argv.extend(["--outdir", LOCAL_OUTDIR, "--dpi", str(LOCAL_DPI)])
+    if bool(LOCAL_OUTPUT["save_extra"]):
+        argv.append("--save-extra")
+    if bool(LOCAL_OUTPUT["clean_output"]):
+        argv.append("--clean-output")
+    argv.extend(["--outdir", str(LOCAL_OUTPUT["outdir"]), "--dpi", str(LOCAL_OUTPUT["dpi"])])
     return argv
 
 
@@ -438,6 +434,10 @@ def output_options(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_outdir(args: argparse.Namespace, name: str) -> Path:
+    # wavefield 是 workflow 的第 6 步。未显式指定 --outdir 时，也写回
+    # outputs/workflow，避免形成另一套独立输出体系。
+    if name in {"workflow", "wavefield"} and not args.outdir:
+        return Path("outputs") / "workflow"
     return Path(args.outdir) if args.outdir else Path("outputs") / name
 
 
@@ -545,7 +545,7 @@ def build_road_void_config_from_args(args: argparse.Namespace) -> RoadVoidConfig
 
     本项目现在要求所有入口都走同一条参数路径：
 
-    ``LOCAL_*_PARAMS / argparse`` -> ``Namespace`` -> ``RoadVoidConfig`` ->
+    ``LOCAL_OUTPUT/LOCAL_WORKFLOW / argparse`` -> ``Namespace`` -> ``RoadVoidConfig`` ->
     ``geometry / forward / wavefield / scan / workflow``。
 
     这样改道路宽度、异常体位置或速度模式后，几何图、正演、扫描和波场
@@ -831,6 +831,7 @@ def run_velocity(args: argparse.Namespace) -> None:
 def run_wavefield(args: argparse.Namespace) -> None:
     cfg = prepare_road_void_config(args, "wavefield")
     outdir, opts, manifest = prepare_output_dir(args, "wavefield")
+    print(f"wavefield 是 workflow 的第 6 步，本次结果写入 {outdir}。")
     cavities = cfg.to_cavities()
     if not cavities:
         print("当前关闭空洞，仅能展示直达波前；建议去掉 --no-cavity。")
@@ -853,7 +854,7 @@ def run_wavefield(args: argparse.Namespace) -> None:
         cfg.to_velocity_model(),
         (float(geom.channel_x[0]), float(geom.channel_x[-1])),
         cavities,
-        manifest.add(outdir / "wavefield_velocity_context.png"),
+        manifest.add(outdir / "06_wavefield_velocity_context.png"),
         effective_velocity=vr_eff,
         velocity_info=velocity_info,
         **opts,
@@ -866,7 +867,7 @@ def run_wavefield(args: argparse.Namespace) -> None:
                 cavities,
                 shot_indices,
                 vr_eff,
-                manifest.add(outdir / "multishot_kinematic_wavefield.gif"),
+                manifest.add(outdir / "06_multishot_wavefield.gif"),
                 t0=cfg.record.t0,
                 n_frames=args.frames,
                 fps=args.fps,
@@ -875,7 +876,7 @@ def run_wavefield(args: argparse.Namespace) -> None:
                 show=bool(opts["show"]),
                 velocity_info=velocity_info,
             )
-            print("已生成 multishot_kinematic_wavefield.gif：多炮顺序激发示意，不是多炮联合反演。")
+            print("已生成 06_multishot_wavefield.gif：多炮顺序激发示意，不是多炮联合反演。")
         else:
             outputs = plot_multishot_wavefield_frames(
                 geom,
@@ -888,6 +889,7 @@ def run_wavefield(args: argparse.Namespace) -> None:
                 show=bool(opts["show"]),
                 dpi=int(opts["dpi"]),
                 velocity_info=velocity_info,
+                filename_prefix="06_multishot_frame",
             )
             for output in outputs:
                 manifest.add(output)
@@ -898,7 +900,7 @@ def run_wavefield(args: argparse.Namespace) -> None:
             cavities,
             shot_index,
             vr_eff,
-            manifest.add(outdir / "kinematic_wavefield.gif"),
+            manifest.add(outdir / "06_kinematic_wavefield.gif"),
             t0=cfg.record.t0,
             n_frames=args.frames,
             fps=args.fps,
@@ -906,13 +908,13 @@ def run_wavefield(args: argparse.Namespace) -> None:
             show=bool(opts["show"]),
             velocity_info=velocity_info,
         )
-        print("已生成 kinematic_wavefield.gif：时间从震源激发连续推进，异常体散射只在 S→D 到时之后出现。")
+        print("已生成 06_kinematic_wavefield.gif：时间从震源激发连续推进，异常体散射只在 S→D 到时之后出现。")
     else:
         frame_save = bool(opts["save"])
         frame_paths = [
-            outdir / "wavefield_frame_early.png",
-            outdir / "wavefield_frame_hit_cavity.png",
-            outdir / "wavefield_frame_scattered.png",
+            outdir / "06_wavefield_frame_early.png",
+            outdir / "06_wavefield_frame_hit_cavity.png",
+            outdir / "06_wavefield_frame_scattered.png",
         ]
         plot_kinematic_wavefield_frames(
             geom,
@@ -925,6 +927,7 @@ def run_wavefield(args: argparse.Namespace) -> None:
             show=bool(opts["show"]),
             dpi=int(opts["dpi"]),
             velocity_info=velocity_info,
+            filename_prefix="06_wavefield",
         )
         for frame_path in frame_paths:
             manifest.add(frame_path, enabled=frame_save)
@@ -1173,26 +1176,63 @@ def run_workflow(args: argparse.Namespace) -> None:
     print("\nStep 6：可选运动学波场动画。")
     animate = bool(args.animate) and not bool(args.no_animate)
     if animate and cavities:
-        animate_kinematic_wavefield(
+        plot_kinematic_wavefield_frames(
             geom,
             cavities,
             shot_index,
             vr_eff,
-            manifest.add(outdir / "06_kinematic_wavefield.gif"),
+            outdir,
             t0=cfg.record.t0,
-            n_frames=args.frames,
-            fps=args.fps,
             save=bool(opts["save"]),
             show=bool(opts["show"]),
+            dpi=int(opts["dpi"]),
             velocity_info=velocity_plot_info(cfg),
+            filename_prefix="06_wavefield",
         )
-        print("已生成 06_kinematic_wavefield.gif。该动画是等效运动学传播示意，不是严格弹性波场快照。")
+        for frame_name in (
+            "06_wavefield_frame_early.png",
+            "06_wavefield_frame_hit_cavity.png",
+            "06_wavefield_frame_scattered.png",
+        ):
+            manifest.add(outdir / frame_name)
+        if getattr(args, "wavefield_mode", "single-shot") == "multi-shot":
+            shot_indices = select_wavefield_shots(args, geom, cavities)
+            animate_multishot_kinematic_wavefield(
+                geom,
+                cavities,
+                shot_indices,
+                vr_eff,
+                manifest.add(outdir / "06_multishot_wavefield.gif"),
+                t0=cfg.record.t0,
+                n_frames=args.frames,
+                fps=args.fps,
+                shot_interval=args.wavefield_shot_interval,
+                save=bool(opts["save"]),
+                show=False,
+                velocity_info=velocity_plot_info(cfg),
+            )
+            print("已生成 06_wavefield_frame_*.png 和 06_multishot_wavefield.gif。该动画是多炮顺序激发示意，不是多炮联合反演。")
+        else:
+            animate_kinematic_wavefield(
+                geom,
+                cavities,
+                shot_index,
+                vr_eff,
+                manifest.add(outdir / "06_kinematic_wavefield.gif"),
+                t0=cfg.record.t0,
+                n_frames=args.frames,
+                fps=args.fps,
+                save=bool(opts["save"]),
+                show=False,
+                velocity_info=velocity_plot_info(cfg),
+            )
+            print("已生成 06_wavefield_frame_*.png 和 06_kinematic_wavefield.gif。该动画是等效运动学传播示意，不是严格弹性波场快照。")
     else:
         print("未生成动画。如需生成等效波场动图，请运行：")
         print("python main.py workflow --animate --save")
         print("或：")
         print("python main.py wavefield --animate --save")
-        print("输出为 outputs/workflow/06_kinematic_wavefield.gif；该动画是等效运动学传播示意，不是严格弹性波场快照。")
+        print("输出写入 outputs/workflow/，该动画是等效运动学传播示意，不是严格弹性波场快照。")
 
     print("\nStep 7：结果总结。")
     if bool(args.save_extra):

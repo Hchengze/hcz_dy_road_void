@@ -11,24 +11,32 @@
 
 ## 推荐入口
 
-如果在 VSCode 中本地调试，推荐直接打开 [main.py](main.py)，修改顶部“本地调试配置区”的 `LOCAL_RUN_MODE` 和 `LOCAL_*_PARAMS`，然后点击 Run Python File：
+如果在 VSCode 中本地调试，推荐直接打开 [main.py](main.py)，只修改顶部的 `LOCAL_RUN_MODE`、`LOCAL_OUTPUT` 和 `LOCAL_WORKFLOW`，然后点击 Run Python File：
 
 ```bash
 python main.py
 ```
 
-当 `USE_LOCAL_DEBUG_CONFIG=True` 且没有输入命令行子命令时，`python main.py` 会读取本地调试配置。例如：
+当 `USE_LOCAL_DEBUG_CONFIG=True` 且没有输入命令行子命令时，`python main.py` 会读取本地 workflow 配置，默认输出进入 `outputs/workflow/`。例如：
 
 ```python
-LOCAL_RUN_MODE = "elastic3d"
-LOCAL_SHOW = True
-LOCAL_SAVE = False
+LOCAL_RUN_MODE = "workflow"
 
-LOCAL_ELASTIC3D_PARAMS = dict(
-    elastic_space_order=4,
-    elastic_abc="sponge",
-    elastic_record_component="strain_rate_xx",
-    elastic_gauge_length=1.0,
+LOCAL_OUTPUT = dict(
+    save=True,
+    show=False,
+    animate=False,
+    save_extra=False,
+    clean_output=True,
+    outdir="outputs/workflow",
+    dpi=150,
+)
+
+LOCAL_WORKFLOW = dict(
+    geometry=dict(road_width=24.0, road_length=80.0),
+    velocity=dict(velocity_mode="layered-effective", rayleigh_velocity=240.0),
+    anomaly=dict(cavity_shape="sphere", cavity_x=42.0, cavity_y=8.5, cavity_depth=2.2),
+    scan=dict(scan_mode="joint", scan_x_min=20.0, scan_x_max=70.0),
 )
 ```
 
@@ -66,7 +74,7 @@ python main.py tutorial --save
 - `geometry`：只画道路、光纤、锤击炮线、空洞位置、平面图和剖面图。
 - `forward`：只做三维等效瑞雷波正演并画 shot gather。
 - `velocity`：展示等效速度/分层速度模型说明。
-- `wavefield`：生成等效运动学波场示意，可选 GIF。
+- `wavefield`：调试 workflow 第 6 步的等效运动学波场示意；默认仍写入 `outputs/workflow/`。
 - `path`：展示直达路径、绕射路径、公式和理论曲线。
 - `scan`：做绕射扫描定位，输出最佳候选和评分图。
 - `sensitivity`：做参数敏感性分析，输出少量趋势图和 CSV。
@@ -80,10 +88,10 @@ python main.py tutorial --save
 
 ## VSCode 本地调试：参数一致性
 
-推荐本地调参时只改 [main.py](main.py) 顶部的 `LOCAL_*_PARAMS`。现在所有主流程都走同一条参数路径：
+推荐本地调参时只改 [main.py](main.py) 顶部的 `LOCAL_OUTPUT` 和 `LOCAL_WORKFLOW`。现在所有主流程都走同一条参数路径：
 
 ```text
-LOCAL_*_PARAMS
+LOCAL_OUTPUT + LOCAL_WORKFLOW
         ↓
 build_args_from_local_config()
         ↓
@@ -94,12 +102,12 @@ RoadVoidConfig
 geometry / forward / wavefield / path / scan / workflow
 ```
 
-因此修改 `LOCAL_GEOMETRY_PARAMS` 里的 `road_width / road_length / channel_spacing / source_spacing` 后，几何图、正演炮检坐标、波场示意、路径图和扫描都会同步使用同一套几何。程序启动时会打印参数摘要和一致性 warning；如果看到“扫描范围没有覆盖异常体”或“记录长度可能不足”，应先调整参数再解释结果。
+因此修改 `LOCAL_WORKFLOW["geometry"]` 里的 `road_width / road_length / channel_spacing / source_spacing` 后，几何图、正演炮检坐标、波场示意、路径图和扫描都会同步使用同一套几何。程序启动时会打印参数摘要和一致性 warning；如果看到“扫描范围没有覆盖异常体”或“记录长度可能不足”，应先调整参数再解释结果。
 
 异常体可以直接改单异常体参数，也可以写多异常体字符串。如果 `anomalies` 非空，它优先于单异常体参数：
 
 ```python
-LOCAL_ANOMALY_PARAMS = dict(
+LOCAL_WORKFLOW["anomaly"].update(
     enable_cavity=True,
     cavity_shape="cylinder",
     cavity_x=50.0,
@@ -113,7 +121,7 @@ LOCAL_ANOMALY_PARAMS = dict(
 ```
 
 ```python
-LOCAL_ANOMALY_PARAMS = dict(
+LOCAL_WORKFLOW["anomaly"].update(
     anomalies="sphere:42,8.5,2.2,2.0,1.0;box:58,6,1.5,4,3,1,0.8",
 )
 ```
@@ -147,18 +155,13 @@ python main.py scan --show --no-save
 python main.py tutorial --save --outdir outputs/tutorial
 ```
 
-默认输出目录按功能分组：
+默认 workflow 主线输出到：
 
-- `outputs/geometry/`
-- `outputs/forward/`
-- `outputs/velocity/`
-- `outputs/wavefield/`
-- `outputs/path/`
-- `outputs/scan/`
-- `outputs/tutorial/`
-- `outputs/workflow/`
-- `outputs/sensitivity/`
-- `outputs/numerics/`
+```text
+outputs/workflow/
+```
+
+项目不再默认生成 `outputs/local_debug/` 或独立的 `outputs/wavefield/`。`wavefield` 是 workflow 第 6 步的调试入口，即使单独运行 `python main.py wavefield --save`，结果也会写入 workflow 输出体系。`elastic3d`、`numerics` 等实验模块仍保留各自目录，避免和主 workflow 图件混在一起。
 
 `workflow --save` 默认只保存一套代表性结果，文件名采用步骤编号，便于按算法顺序阅读：
 
@@ -195,13 +198,13 @@ python main.py workflow --animate --save
 python main.py wavefield --animate --save
 ```
 
-如果运行 `python main.py wavefield --save` 而不加 `--animate`，会输出三张关键帧和一个速度上下文图：
+如果运行 `python main.py wavefield --save` 而不加 `--animate`，会输出三张关键帧和一个速度上下文图。注意：这些文件仍然写入 `outputs/workflow/`：
 
 ```text
-outputs/wavefield/wavefield_frame_early.png
-outputs/wavefield/wavefield_frame_hit_cavity.png
-outputs/wavefield/wavefield_frame_scattered.png
-outputs/wavefield/wavefield_velocity_context.png
+outputs/workflow/06_wavefield_frame_early.png
+outputs/workflow/06_wavefield_frame_hit_cavity.png
+outputs/workflow/06_wavefield_frame_scattered.png
+outputs/workflow/06_wavefield_velocity_context.png
 ```
 
 这些图和 GIF 都是“等效运动学传播示意”，用于理解直达波前、异常体散射触发时刻和 DAS 接收线位置，不是完整弹性波场快照。当前实现中散射波只有在直达波从震源传播到异常体之后才出现，三张关键帧含义为：
@@ -215,7 +218,7 @@ wavefield 与速度模式的关系：
 - `velocity-mode=uniform`：wavefield 使用原始 `VR`；
 - `velocity-mode=layered-effective`：wavefield 使用层状速度折算出的 `VR_eff`。
 
-但 layered-effective wavefield 仍是 x-y 平面等效运动学波场，波前会像均匀介质一样扩散；它只是使用 `VR_eff` 改变传播半径和到时，并在 `wavefield_velocity_context.png` 中显示分层速度背景。不要把它解释为严格分层介质弹性波场。真正的分层全波场现象应使用 `elastic3d` 或后续更严格的数值方法检查。
+但 layered-effective wavefield 仍是 x-y 平面等效运动学波场，波前会像均匀介质一样扩散；它只是使用 `VR_eff` 改变传播半径和到时，并在 `06_wavefield_velocity_context.png` 中显示分层速度背景。不要把它解释为严格分层介质弹性波场。真正的分层全波场现象应使用 `elastic3d` 或后续更严格的数值方法检查。
 
 多炮 wavefield 只在显式请求时生成：
 
@@ -227,7 +230,7 @@ python main.py wavefield --wavefield-mode multi-shot --animate --save
 不加 `--animate` 时，每个选中炮只输出一张代表性关键帧；加 `--animate` 时输出：
 
 ```text
-outputs/wavefield/multishot_kinematic_wavefield.gif
+outputs/workflow/06_multishot_wavefield.gif
 ```
 
 multi-shot wavefield 是多炮覆盖的传播示意，帮助理解炮点位置如何变化；真正用于定位的是 `scan-mode=joint` 的多炮联合评分。不要把 multi-shot wavefield 称为多炮联合反演。
