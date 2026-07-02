@@ -209,7 +209,7 @@ t_diff(S_j, G_i) = t0 + |S_j - D| / VR + |D - G_i| / VR
 
 当前 `workflow` 的速度模型图会真实反映 `velocity_mode`：`uniform` 显示单层等效速度，`layered-effective` 显示层状速度并标注 `VR_eff`。`VR_eff` 会进入运动学正演和扫描，但它仍是轻量有效速度近似，不是完整 Rayleigh 频散反演或 `elastic3d` 的 `Vp/Vs/rho` 模型。
 
-从科研级合成数据阶段开始，`workflow --save-extra --save` 会额外输出地下道路模型、结构化 synthetic survey dataset、DAS-like gather、绕射/散射属性、定位误差和 `research_report.md`。这些结果服务于方法验证和实验记录；默认 `workflow --save` 仍只输出主线核心图，避免输出目录再次变乱。
+从科研级合成数据阶段开始，默认 `workflow --save` 已经输出地下道路模型、结构化 synthetic survey dataset metadata、DAS-like gather、绕射/散射属性、定位误差、wavefield 关键帧和 `research_report.md`。这些结果服务于方法验证和实验记录，并且全部进入 `outputs/workflow/`。`--save-extra` 只用于保存体积更大的 `synthetic_dataset.npz` 和额外多炮诊断图，避免默认输出再次分裂或重复。
 
 wavefield 图件也遵循同一速度逻辑：`uniform` 使用 `VR`，`layered-effective` 使用 `VR_eff`。默认 `--wavefield-view plan` 是 x-y 地表平面运动学波场示意：道路、DAS 光纤和锤击点都在地表平面上，适合检查直达波前、异常体触发时刻和单侧孔径关系。深度 `z` 通过异常体深度进入 `S-D-G` 绕射走时，但平面图不显示完整 x-y-z 波场。
 
@@ -218,6 +218,8 @@ wavefield 图件也遵循同一速度逻辑：`uniform` 使用 `VR`，`layered-e
 multi-shot wavefield 只是把多个炮点按顺序激发出来，帮助理解多炮覆盖范围和炮点位置变化。真正参与定位的是 `scan-mode=joint` 的多炮联合评分；multi-shot wavefield 不是多炮联合反演。
 
 直接在 VSCode 运行 `main.py` 时，顶部的 `LOCAL_OUTPUT` 和 `LOCAL_WORKFLOW` 会先统一转换成 `RoadVoidConfig`，再供几何、正演、波场、路径和扫描共用。这样修改道路宽度、异常体位置或速度模式后，各步骤应保持一致；若扫描范围未覆盖异常体或记录长度不足，程序会在控制台给出 warning。默认 workflow 与 wavefield 第 6 步结果都写入 `outputs/workflow/`，不再维护单独的 `outputs/local_debug/` 或 `outputs/wavefield/` 输出体系。
+
+默认 workflow 的模块依赖链见 `docs/workflow_dependency_map_zh.md`。新增功能应优先复用当前 `cfg / workflow / scenario / survey_dataset / diffraction_result / localization_eval`，不要在下游步骤偷偷重建默认数据。
 
 ## 7. 小尺度 3D elastic FDTD 原型
 

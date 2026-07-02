@@ -94,14 +94,13 @@ FWI 必须建立在可信 forward solver 和清晰数据残差定义之上。当
 
 ## 7. 本轮新增科研级闭环
 
-`workflow --save-extra --save` 会额外输出：
+默认 `workflow --save` 会输出完整主链条结果：
 
 - 道路地下三层模型 x-z/y-z/3D 图；
-- 结构化 synthetic survey dataset；
+- 结构化 synthetic survey dataset metadata；
 - DAS-like gather 和噪声/耦合分量；
 - 绕射/散射 envelope 属性和候选评分；
 - joint localization error summary；
 - `research_report.md`。
 
-这些输出用于科研记录与方法对比；默认 `workflow --save` 仍只输出主线核心图，避免结果目录变乱。
-
+这些输出用于科研记录与方法对比，并全部写入 `outputs/workflow/`。`--save-extra` 仅额外保存较重的 `synthetic_dataset.npz` 和多炮诊断图，不改变默认 workflow 的主链条。

@@ -144,7 +144,7 @@ lambda = VR / f
 - `--save`：保存图件；
 - `--show`：交互显示；
 - `--no-save`：不保存；
-- `--save-extra`：保存诊断图、对比图、中间图和 `run_parameters.json`。默认只保存当前子命令必要图件，避免输出过多；
+- `--save-extra`：保存体积更大的数据文件和额外诊断图。默认 workflow 已保存完整主链条图件、metadata、`research_report.md`、`run_parameters.json` 和 `output_manifest.txt`；`--save-extra` 主要用于 `synthetic_dataset.npz`、每炮贡献图等额外材料；
 - `--clean-output`：运行前清理当前 `outdir` 里的旧结果文件，只影响当前子目录，不会清理整个 `outputs/`；
 - `--outdir`：输出目录；
 - `--dpi`：图片分辨率。
@@ -153,7 +153,7 @@ lambda = VR / f
 
 每次保存运行会打印本次实际生成文件，并在当前输出目录写入 `output_manifest.txt`。如果某个目录中历史图很多，建议使用 `--clean-output` 避免把旧图误认为新结果。
 
-科研级附加输出使用 `--save-extra` 控制：只有显式开启时才保存地下模型剖面、synthetic dataset、DAS-like gather、绕射属性、定位误差图和 `research_report.md`。默认 workflow 不保存这些扩展文件，以保持输出少而清楚。
+默认 workflow 已保存地下模型剖面、synthetic dataset metadata、DAS-like gather、绕射属性、定位误差图和 `research_report.md`，用于形成完整科研记录。`--save-extra` 只保存更重的 `synthetic_dataset.npz` 和额外多炮诊断图；如果只想检查流程而不落盘，请使用 `--no-save`。
 
 ## wavefield 参数
 

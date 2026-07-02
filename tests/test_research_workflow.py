@@ -147,9 +147,10 @@ def test_workflow_save_extra_generates_research_outputs():
     assert (outdir / "04b_diffraction_attribute.png").exists()
     assert (outdir / "05b_localization_error_summary.png").exists()
     assert (outdir / "research_report.md").exists()
+    assert (outdir / "synthetic_dataset.npz").exists()
 
 
-def test_default_workflow_outputs_remain_controlled():
+def test_default_workflow_outputs_full_chain_without_heavy_npz_or_gif():
     outdir = _workspace_tmp("workflow_research_default")
     _run_cli(
         "workflow",
@@ -167,8 +168,78 @@ def test_default_workflow_outputs_remain_controlled():
         "40",
     )
     assert (outdir / "01_geometry_plan_sections.png").exists()
-    assert not (outdir / "02b_subsurface_model_xz.png").exists()
-    assert not (outdir / "research_report.md").exists()
+    assert (outdir / "02b_subsurface_model_xz.png").exists()
+    assert (outdir / "03b_das_like_gather.png").exists()
+    assert (outdir / "04b_diffraction_attribute.png").exists()
+    assert (outdir / "05b_localization_error_summary.png").exists()
+    assert (outdir / "06_wavefield_frame_scattered.png").exists()
+    assert (outdir / "06_wavefield_3d_frame_scattered.png").exists()
+    assert (outdir / "synthetic_dataset_metadata.json").exists()
+    assert (outdir / "research_report.md").exists()
+    assert (outdir / "run_parameters.json").exists()
+    assert (outdir / "output_manifest.txt").exists()
+    assert not (outdir / "synthetic_dataset.npz").exists()
+    assert not list(outdir.glob("*.gif"))
+
+
+def test_workflow_outputs_use_single_orchestration_chain():
+    outdir = _workspace_tmp("workflow_chain_consistency")
+    _run_cli(
+        "workflow",
+        "--save",
+        "--clean-output",
+        "--outdir",
+        str(outdir),
+        "--velocity-mode",
+        "layered-effective",
+        "--layer-velocities",
+        "160,230,340",
+        "--cavity-x",
+        "46",
+        "--cavity-y",
+        "9",
+        "--cavity-depth",
+        "2.4",
+        "--scan-x-min",
+        "38",
+        "--scan-x-max",
+        "54",
+        "--scan-x-step",
+        "8",
+        "--scan-y-step",
+        "5",
+        "--scan-h-step",
+        "1.5",
+        "--scan-vr-step",
+        "40",
+    )
+    metadata = (outdir / "synthetic_dataset_metadata.json").read_text(encoding="utf-8")
+    report = (outdir / "research_report.md").read_text(encoding="utf-8")
+    params = (outdir / "run_parameters.json").read_text(encoding="utf-8")
+    assert "layered-effective" in metadata
+    assert "46.0" in metadata
+    assert "layered-effective" in params
+    assert "46.0" in report
+
+
+def test_main_uses_high_level_config_builder_imports():
+    text = Path("main.py").read_text(encoding="utf-8")
+    assert "from road_void.config import CavityConfig" not in text
+    assert "from road_void.runner import run_full_workflow" in text
+
+
+def test_workflow_dependency_map_documents_single_chain():
+    text = Path("docs/workflow_dependency_map_zh.md").read_text(encoding="utf-8")
+    assert "RoadVoidConfig" in text
+    assert "ScenarioModel" in text
+    assert "SyntheticDataset" in text
+    assert "diffraction" in text
+    assert "Research report" in text
+
+
+def test_numerics_router_cli_no_save_runs():
+    completed = _run_cli("numerics", "--no-save", "--numerics-mode", "compare", "--numerics-duration", "0.06")
+    assert "numerics-compare" in completed.stdout
 
 
 def test_elastic_validate_cli_no_save_runs():

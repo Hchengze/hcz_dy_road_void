@@ -372,8 +372,8 @@ def test_main_tutorial_no_save_is_compact():
 def test_workflow_no_save_does_not_run_sensitivity_or_animation():
     completed = _run_cli("workflow", "--no-save")
     assert "parameter_sensitivity_results.csv" not in completed.stdout
-    assert "输出写入 outputs/workflow" in completed.stdout
-    assert "未生成动画" in completed.stdout
+    assert "output_dir=outputs/workflow" in completed.stdout
+    assert "no_animation_generated" in completed.stdout
 
 
 def test_workflow_default_saved_png_count_is_controlled():
@@ -399,15 +399,32 @@ def test_workflow_default_saved_png_count_is_controlled():
         "01_geometry_3d.png",
         "01_geometry_plan_sections.png",
         "02_velocity_model.png",
+        "02b_subsurface_model_xz.png",
+        "02c_subsurface_model_yz.png",
+        "02d_subsurface_model_3d.png",
         "03_forward_gather.png",
+        "03b_das_like_gather.png",
+        "03c_noise_components.png",
         "04_diffraction_path.png",
         "04_gather_with_curves.png",
+        "04b_diffraction_attribute.png",
+        "04c_diffraction_candidates.png",
         "05_residual_best_curve.png",
         "05_scan_score_slices.png",
+        "05b_localization_error_summary.png",
+        "05c_uncertainty_slices.png",
+        "06_wavefield_3d_frame_early.png",
+        "06_wavefield_3d_frame_hit_cavity.png",
+        "06_wavefield_3d_frame_scattered.png",
+        "06_wavefield_frame_early.png",
+        "06_wavefield_frame_hit_cavity.png",
+        "06_wavefield_frame_scattered.png",
     ]
     assert not (outdir / "single_shot_vs_joint.png").exists()
-    assert not any(p.name.startswith("06_wavefield") for p in outdir.glob("*.png"))
     assert not (outdir / "06_kinematic_wavefield.gif").exists()
+    assert not (outdir / "synthetic_dataset.npz").exists()
+    assert (outdir / "research_report.md").exists()
+    assert (outdir / "run_parameters.json").exists()
     assert (outdir / "output_manifest.txt").exists()
 
 

@@ -13,27 +13,28 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-from dataclasses import replace
 from pathlib import Path
-from shutil import rmtree
 
-import numpy as np
-
-from road_void.config import CavityConfig, GeometryConfig, NoiseConfig, ProcessingConfig, RecordConfig, RoadVoidConfig, VelocityConfig
-from road_void.dataset import generate_synthetic_survey_dataset, plot_das_like_gather, plot_noise_components, save_synthetic_survey_dataset
-from road_void.diffraction import detect_diffraction_features, plot_diffraction_attribute, plot_diffraction_candidates
+from road_void.config_builder import (
+    build_road_void_config_from_args,
+    config_from_args,
+    parse_float_list,
+    prepare_road_void_config,
+    select_wavefield_shots,
+    velocity_plot_info,
+)
+from road_void import config_builder as _config_builder
+from road_void import output as _output
 from road_void.elastic_bridge import build_local_elastic_validation_case, plot_elastic_validation_outputs, run_elastic_validation_case
 from road_void.elastic3d import Elastic3DConfig, animate_elastic3d_wavefield, plot_abc_comparison, plot_elastic3d_outputs, run_elastic3d
 from road_void.fwi import plot_fwi_demo_outputs, run_fwi_misfit_demo
-from road_void.inversion import plot_localization_error_summary, plot_uncertainty_summary, run_joint_localization_evaluation, write_research_report
 from road_void.numerics import run_bem2d_scatter_demo, run_fem1d_wave_demo, run_sem1d_wave_demo
 from road_void.numerics.compare import compare_1d_wave_methods
-from road_void.scenario import build_default_subsurface_scenario, plot_subsurface_3d, plot_subsurface_sections
+from road_void.output import command_outdir, output_options, prepare_output_dir, save_run_parameters
+from road_void.runner import run_full_workflow
 from road_void.visualization import (
     animate_kinematic_wavefield,
-    animate_kinematic_wavefield_3d,
     animate_multishot_kinematic_wavefield,
     plot_kinematic_wavefield_frames_3d,
     plot_kinematic_wavefield_frames,
@@ -117,8 +118,9 @@ USE_LOCAL_DEBUG_CONFIG = True
 # numerics-compare:
 #   FDTD/FEM/SEM 统一 1D 标量波 benchmark，用于比较教学原型，不参与道路空洞 workflow。
 LOCAL_RUN_MODE_NOTES = """
-workflow/all/geometry/velocity/forward/wavefield/path/scan/sensitivity/tutorial/
-elastic3d/elastic-validate/fwi-demo/numerics-demo/numerics-compare 模式说明见 main.py 顶部注释。
+推荐本地模式：workflow / elastic3d / elastic-validate / numerics / tutorial；all 是 workflow 的别名。
+专家命令行入口仍保留 geometry / velocity / forward / wavefield / path / scan /
+sensitivity / fwi-demo / numerics-demo / numerics-compare；日常 VSCode 调试不建议优先使用。
 """
 LOCAL_RUN_MODE = "workflow"
 
@@ -270,6 +272,7 @@ LOCAL_FWI = dict(
 )
 
 LOCAL_NUMERICS = dict(
+    numerics_mode="compare", # "demo", "compare", "all"；推荐 compare，用统一 1D benchmark 检查 FDTD/FEM/SEM。
     method="all",          # "fem", "sem", "bem", "all"。
     numerics_length=100.0, # 1D FEM/SEM 标量波模型长度，单位 m。
     numerics_velocity=300.0,
@@ -324,8 +327,10 @@ def _local_config_to_argv(mode: str) -> list[str]:
     if mode == "fwi-demo":
         params.update(LOCAL_ELASTIC3D)
         params.update(LOCAL_FWI)
-    if mode == "numerics-demo":
+    if mode == "numerics":
         params.update(LOCAL_NUMERICS)
+    if mode == "numerics-demo":
+        params.update({k: v for k, v in LOCAL_NUMERICS.items() if k != "numerics_mode"})
     if mode == "numerics-compare":
         params.update(LOCAL_NUMERICS_COMPARE)
 
@@ -541,6 +546,20 @@ def add_numerics_compare_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--numerics-source-position", type=float, default=25.0, help="点源位置，单位 m。")
     parser.add_argument("--numerics-receiver-position", type=float, default=75.0, help="接收点位置，单位 m。")
     parser.add_argument("--numerics-source-frequency", type=float, default=35.0, help="Ricker 点源主频，单位 Hz；三种方法统一使用。")
+
+
+def add_numerics_router_args(parser: argparse.ArgumentParser) -> None:
+    """VSCode 推荐的 numerics 聚合入口参数。"""
+
+    parser.add_argument("--numerics-mode", choices=["demo", "compare", "all"], default="compare", help="numerics 聚合入口。compare 运行 FDTD/FEM/SEM 统一 1D benchmark；demo 运行 FEM/SEM/BEM 教学图；all 两者都运行。")
+    parser.add_argument("--method", choices=["fem", "sem", "bem", "all"], default="all", help="numerics-mode=demo 时选择 FEM、SEM、BEM 或全部。")
+    parser.add_argument("--numerics-length", type=float, default=100.0, help="1D 标量 benchmark 或 demo 的模型长度，单位 m。")
+    parser.add_argument("--numerics-velocity", type=float, default=300.0, help="1D 标量波速度，单位 m/s。")
+    parser.add_argument("--numerics-duration", type=float, default=0.24, help="记录时长，单位 s。")
+    parser.add_argument("--numerics-dt", type=float, default=0.0005, help="compare 模式使用的统一时间步长，单位 s。")
+    parser.add_argument("--numerics-source-position", type=float, default=25.0, help="compare 模式点源位置，单位 m。")
+    parser.add_argument("--numerics-receiver-position", type=float, default=75.0, help="compare 模式接收点位置，单位 m。")
+    parser.add_argument("--numerics-source-frequency", type=float, default=35.0, help="compare 模式 Ricker 主频，单位 Hz。")
 
 
 def output_options(args: argparse.Namespace) -> dict[str, object]:
@@ -891,6 +910,20 @@ def save_run_parameters(cfg: RoadVoidConfig, outdir: Path, enabled: bool) -> Non
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+# 下方保留少量历史 helper 定义以减少大规模文本变更风险；真正活动路径在这里重绑定到
+# road_void.config_builder / road_void.output，确保所有入口使用同一条参数和输出链。
+parse_float_list = _config_builder.parse_float_list
+config_from_args = _config_builder.config_from_args
+build_road_void_config_from_args = _config_builder.build_road_void_config_from_args
+prepare_road_void_config = _config_builder.prepare_road_void_config
+select_wavefield_shots = _config_builder.select_wavefield_shots
+velocity_plot_info = _config_builder.velocity_plot_info
+output_options = _output.output_options
+command_outdir = _output.command_outdir
+prepare_output_dir = _output.prepare_output_dir
+save_run_parameters = _output.save_run_parameters
+
+
 def run_geometry(args: argparse.Namespace) -> None:
     cfg = prepare_road_void_config(args, "geometry")
     outdir, opts, manifest = prepare_output_dir(args, "geometry")
@@ -1215,6 +1248,11 @@ def run_workflow(args: argparse.Namespace) -> None:
     算法路线；tutorial 更像少量图件教学输出。这里统一上下文，避免重复调用
     run_forward/run_scan 导致重复正演、重复扫描和重复图件。
     """
+
+    cfg = prepare_road_void_config(args, "workflow")
+    outdir, opts, manifest = prepare_output_dir(args, "workflow")
+    run_full_workflow(args, cfg, outdir, opts, manifest)
+    return
 
     cfg = prepare_road_void_config(args, "workflow")
     outdir, opts, manifest = prepare_output_dir(args, "workflow")
@@ -1754,6 +1792,16 @@ def run_numerics_compare(args: argparse.Namespace) -> None:
     manifest.write_and_print()
 
 
+def run_numerics(args: argparse.Namespace) -> None:
+    """推荐的 numerics 聚合入口：在 demo 与 compare 之间做轻量路由。"""
+
+    mode = getattr(args, "numerics_mode", "compare")
+    if mode in {"demo", "all"}:
+        run_numerics_demo(args)
+    if mode in {"compare", "all"}:
+        run_numerics_compare(args)
+
+
 def run_all(args: argparse.Namespace) -> None:
     """all 作为 workflow 的别名，避免维护两套完整流程。"""
 
@@ -1776,6 +1824,7 @@ def build_parser() -> argparse.ArgumentParser:
         "elastic3d": run_elastic3d_command,
         "elastic-validate": run_elastic_validate,
         "fwi-demo": run_fwi_demo,
+        "numerics": run_numerics,
         "numerics-demo": run_numerics_demo,
         "numerics-compare": run_numerics_compare,
         "all": run_all,
@@ -1795,6 +1844,8 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "fwi-demo":
             add_elastic3d_args(p)
             add_fwi_args(p)
+        if name == "numerics":
+            add_numerics_router_args(p)
         if name == "numerics-demo":
             add_numerics_args(p)
         if name == "numerics-compare":
