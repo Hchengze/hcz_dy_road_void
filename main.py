@@ -17,6 +17,7 @@ import json
 import sys
 from dataclasses import replace
 from pathlib import Path
+from shutil import rmtree
 
 import numpy as np
 
@@ -27,7 +28,9 @@ from road_void.numerics import run_bem2d_scatter_demo, run_fem1d_wave_demo, run_
 from road_void.numerics.compare import compare_1d_wave_methods
 from road_void.visualization import (
     animate_kinematic_wavefield,
+    animate_multishot_kinematic_wavefield,
     plot_kinematic_wavefield_frames,
+    plot_multishot_wavefield_frames,
     plot_diffraction_path_demo,
     plot_geometry_plan_and_sections,
     plot_multishot_scan_diagnostics,
@@ -166,6 +169,15 @@ LOCAL_NUMERICS_COMPARE_PARAMS = dict(
     numerics_source_frequency=35.0,    # Ricker 源主频，单位 Hz。
 )
 
+LOCAL_WAVEFIELD_PARAMS = dict(
+    wavefield_mode="single-shot",      # single-shot 只看一炮；multi-shot 顺序展示多炮覆盖。
+    wavefield_shot_index=None,         # 单炮模式指定炮号；None 时自动选靠近主异常体的炮。
+    wavefield_shot_indices="",         # 多炮显式炮号，如 "0,5,10"；非空时优先。
+    wavefield_max_shots=5,             # 多炮最多展示几炮，避免 GIF 过大。
+    wavefield_shot_step=5,             # 未指定 indices 时，每隔几炮选一炮。
+    wavefield_shot_interval=0.25,      # 多炮 GIF 的示意全局时间间隔，单位 s。
+)
+
 
 WORKFLOW_STEPS = [
     ("geometry", "建立道路三维几何：道路、光纤、炮线、空洞"),
@@ -198,6 +210,8 @@ def _local_config_to_argv(mode: str) -> list[str]:
     params.update(LOCAL_NOISE_PARAMS)
     if mode in {"workflow", "scan", "sensitivity", "tutorial", "all"}:
         params.update(LOCAL_SCAN_PARAMS)
+    if mode in {"workflow", "wavefield", "tutorial", "all"}:
+        params.update(LOCAL_WAVEFIELD_PARAMS)
     if mode == "elastic3d":
         params.update(LOCAL_ELASTIC3D_PARAMS)
     if mode == "fwi-demo":
@@ -272,6 +286,8 @@ def add_output_args(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument("--save", action="store_true", help="保存图件到 --outdir。适合批量运行和写汇报材料。")
     parser.add_argument("--no-save", action="store_true", help="不保存图件。用于快速测试，优先级高于 --save。")
+    parser.add_argument("--save-extra", action="store_true", help="额外保存诊断图/对比图/中间图。默认只保存当前子命令的必要图件，避免输出爆炸。")
+    parser.add_argument("--clean-output", action="store_true", help="运行前清理当前 outdir 中旧的 png/gif/json/txt 文件；不会清理全局 outputs/ 或其它子目录。")
     parser.add_argument("--show", action="store_true", help="用 matplotlib 交互窗口显示图件，适合本地调参时观察细节。")
     parser.add_argument("--no-show", action="store_true", help="不弹出交互窗口。用于脚本批量运行。")
     parser.add_argument("--outdir", default=None, help="输出目录。若不指定，则按子命令写入 outputs/<subcommand>/。")
@@ -355,6 +371,17 @@ def add_animation_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--fps", type=int, default=10, help="GIF 帧率。")
 
 
+def add_wavefield_args(parser: argparse.ArgumentParser) -> None:
+    """等效运动学波场示意参数。"""
+
+    parser.add_argument("--wavefield-mode", choices=["single-shot", "multi-shot"], default="single-shot", help="波场示意模式。single-shot 只展示一炮；multi-shot 顺序展示多炮覆盖，但仍只是传播示意，不是联合反演。")
+    parser.add_argument("--wavefield-shot-index", type=int, default=None, help="single-shot 使用的炮号；不设时自动选择靠近主异常体的炮。")
+    parser.add_argument("--wavefield-shot-indices", default="", help="multi-shot 显式炮号列表，例如 0,5,10；非空时优先于 --wavefield-shot-step。")
+    parser.add_argument("--wavefield-max-shots", type=int, default=5, help="multi-shot 最多展示几炮，避免 GIF 或关键帧过多。")
+    parser.add_argument("--wavefield-shot-step", type=int, default=5, help="multi-shot 自动选择炮号时的炮间隔，例如每 5 炮取一炮。")
+    parser.add_argument("--wavefield-shot-interval", type=float, default=0.25, help="multi-shot GIF 中相邻炮的示意全局时间间隔，单位 s。")
+
+
 def add_elastic3d_args(parser: argparse.ArgumentParser) -> None:
     """小尺度三维弹性波全波形原型参数。"""
 
@@ -414,6 +441,59 @@ def command_outdir(args: argparse.Namespace, name: str) -> Path:
     return Path(args.outdir) if args.outdir else Path("outputs") / name
 
 
+class OutputManifest:
+    """记录本次运行实际生成的文件，帮助区分新图和历史旧图。"""
+
+    def __init__(self, outdir: Path, save: bool) -> None:
+        self.outdir = outdir
+        self.save = save
+        self.files: list[Path] = []
+
+    def add(self, path: Path | str, *, enabled: bool = True) -> Path:
+        p = Path(path)
+        if self.save and enabled:
+            self.files.append(p)
+        return p
+
+    def write_and_print(self) -> None:
+        if not self.files:
+            print("本次实际生成文件：无（save=False 或 --no-save）。")
+            return
+        print("本次实际生成文件：")
+        for idx, path in enumerate(self.files, start=1):
+            print(f"{idx}. {path}")
+        self.outdir.mkdir(parents=True, exist_ok=True)
+        manifest = self.outdir / "output_manifest.txt"
+        with manifest.open("w", encoding="utf-8") as f:
+            for idx, path in enumerate(self.files, start=1):
+                f.write(f"{idx}. {path}\n")
+        print(f"输出清单: {manifest}")
+
+
+def prepare_output_dir(args: argparse.Namespace, name: str) -> tuple[Path, dict[str, object], OutputManifest]:
+    """统一处理 outdir、--clean-output 和输出清单。"""
+
+    outdir = command_outdir(args, name)
+    opts = output_options(args)
+    if bool(getattr(args, "clean_output", False)):
+        clean_output_dir(outdir)
+    return outdir, opts, OutputManifest(outdir, bool(opts["save"]))
+
+
+def clean_output_dir(outdir: Path) -> None:
+    """只清理当前 outdir 中的常见结果文件，不碰其它 outputs 子目录。"""
+
+    if not outdir.exists():
+        return
+    allowed = {".png", ".gif", ".mp4", ".json", ".txt", ".csv"}
+    for item in outdir.iterdir():
+        if item.is_file() and item.suffix.lower() in allowed:
+            item.unlink()
+        elif item.is_dir() and item.name.startswith("_tmp"):
+            rmtree(item)
+    print(f"已清理当前输出目录中的旧结果文件: {outdir}")
+
+
 def parse_float_list(text: str) -> tuple[float, ...]:
     """解析命令行中的逗号分隔浮点数列表。"""
 
@@ -424,6 +504,40 @@ def parse_float_list(text: str) -> tuple[float, ...]:
     if not values:
         raise argparse.ArgumentTypeError("浮点数列表不能为空。")
     return values
+
+
+def parse_int_list(text: str) -> list[int]:
+    """解析逗号分隔整数列表；空字符串返回空列表。"""
+
+    if not text:
+        return []
+    try:
+        return [int(part.strip()) for part in text.split(",") if part.strip()]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"无法解析整数列表: {text}") from exc
+
+
+def select_wavefield_shots(args: argparse.Namespace, geom, cavities) -> list[int]:
+    """根据 wavefield 参数选择单炮或多炮索引。"""
+
+    n = geom.n_shots
+    if n <= 0:
+        return []
+    mode = getattr(args, "wavefield_mode", "single-shot")
+    if mode == "single-shot":
+        if getattr(args, "wavefield_shot_index", None) is not None:
+            return [max(0, min(n - 1, int(args.wavefield_shot_index)))]
+        if cavities:
+            return [min(range(n), key=lambda i: abs(geom.shot_x[i] - cavities[0].x0))]
+        return [n // 2]
+    explicit = parse_int_list(getattr(args, "wavefield_shot_indices", ""))
+    if explicit:
+        selected = [idx for idx in explicit if 0 <= idx < n]
+    else:
+        step = max(1, int(getattr(args, "wavefield_shot_step", 5)))
+        selected = list(range(0, n, step))
+    max_shots = max(1, int(getattr(args, "wavefield_max_shots", 5)))
+    return selected[:max_shots]
 
 
 def build_road_void_config_from_args(args: argparse.Namespace) -> RoadVoidConfig:
@@ -661,17 +775,18 @@ def save_run_parameters(cfg: RoadVoidConfig, outdir: Path, enabled: bool) -> Non
 
 def run_geometry(args: argparse.Namespace) -> None:
     cfg = prepare_road_void_config(args, "geometry")
-    outdir = command_outdir(args, "geometry")
-    opts = output_options(args)
-    plot_road_geometry_3d(cfg.to_geometry(), cfg.to_cavities(), outdir / "geometry_3d.png", **opts)
-    plot_geometry_plan_and_sections(cfg.to_geometry(), cfg.to_cavities(), outdir / "geometry_plan_sections.png", **opts)
-    save_run_parameters(cfg, outdir, bool(opts["save"]))
+    outdir, opts, manifest = prepare_output_dir(args, "geometry")
+    plot_road_geometry_3d(cfg.to_geometry(), cfg.to_cavities(), manifest.add(outdir / "geometry_3d.png"), **opts)
+    plot_geometry_plan_and_sections(cfg.to_geometry(), cfg.to_cavities(), manifest.add(outdir / "geometry_plan_sections.png"), **opts)
+    if bool(args.save_extra):
+        save_run_parameters(cfg, outdir, bool(opts["save"]))
+        manifest.add(outdir / "run_parameters.json")
+    manifest.write_and_print()
 
 
 def run_forward(args: argparse.Namespace) -> None:
     cfg = prepare_road_void_config(args, "forward")
-    outdir = command_outdir(args, "forward")
-    opts = output_options(args)
+    outdir, opts, manifest = prepare_output_dir(args, "forward")
     ds = simulate_from_config(cfg)
     geom = ds.geometry
     cavities = cfg.to_cavities()
@@ -683,81 +798,150 @@ def run_forward(args: argparse.Namespace) -> None:
         direct_times=ds.direct_times,
         diffraction_times=ds.diffraction_times[0] if ds.diffraction_times else None,
         title="三维等效瑞雷波正演记录",
-        output=outdir / "forward_shot_gather.png",
+        output=manifest.add(outdir / "forward_shot_gather.png"),
         **opts,
     )
     print(f"合成数据形状: {ds.data.shape}")
-    save_run_parameters(cfg, outdir, bool(opts["save"]))
+    if bool(args.save_extra):
+        save_run_parameters(cfg, outdir, bool(opts["save"]))
+        manifest.add(outdir / "run_parameters.json")
+    manifest.write_and_print()
 
 
 def run_velocity(args: argparse.Namespace) -> None:
     cfg = prepare_road_void_config(args, "velocity")
-    outdir = command_outdir(args, "velocity")
-    opts = output_options(args)
+    outdir, opts, manifest = prepare_output_dir(args, "velocity")
     geom = cfg.to_geometry()
     plot_velocity_model(
         cfg.to_velocity_model(),
         (float(geom.channel_x[0]), float(geom.channel_x[-1])),
         cfg.to_cavities(),
-        outdir / "velocity_model.png",
+        manifest.add(outdir / "velocity_model.png"),
         effective_velocity=cfg.effective_rayleigh_velocity(),
         velocity_info=velocity_plot_info(cfg),
         **opts,
     )
     print(f"说明：velocity-mode={cfg.velocity.velocity_model_type}，当前正演和扫描实际使用 VR_eff={cfg.effective_rayleigh_velocity():.1f} m/s。layered-effective 是轻量近似，不是完整频散反演。")
-    save_run_parameters(cfg, outdir, bool(opts["save"]))
+    if bool(args.save_extra):
+        save_run_parameters(cfg, outdir, bool(opts["save"]))
+        manifest.add(outdir / "run_parameters.json")
+    manifest.write_and_print()
 
 
 def run_wavefield(args: argparse.Namespace) -> None:
     cfg = prepare_road_void_config(args, "wavefield")
-    outdir = command_outdir(args, "wavefield")
-    opts = output_options(args)
+    outdir, opts, manifest = prepare_output_dir(args, "wavefield")
     cavities = cfg.to_cavities()
     if not cavities:
         print("当前关闭空洞，仅能展示直达波前；建议去掉 --no-cavity。")
         return
     geom = cfg.to_geometry()
-    shot_index = min(range(geom.n_shots), key=lambda i: abs(geom.shot_x[i] - cavities[0].x0))
+    vr_eff = cfg.effective_rayleigh_velocity()
+    velocity_info = velocity_plot_info(cfg)
+    shot_indices = select_wavefield_shots(args, geom, cavities)
+    if not shot_indices:
+        print("没有可用炮点，无法生成 wavefield。")
+        return
+    shot_index = shot_indices[0]
     animate = bool(args.animate) and not bool(args.no_animate)
-    if animate:
+    print(f"wavefield 使用速度: velocity_mode={cfg.velocity.velocity_model_type}, VR={cfg.velocity.rayleigh_velocity:.1f} m/s, VR_eff={vr_eff:.1f} m/s")
+    if cfg.velocity.velocity_model_type == "layered-effective":
+        print("说明：layered-effective 只折算 VR_eff；x-y 波场仍是等效运动学示意，不伪造成严格分层介质波场。")
+    else:
+        print("说明：uniform 使用单一 VR；本图仍是等效运动学传播示意，不是弹性波场快照。")
+    plot_velocity_model(
+        cfg.to_velocity_model(),
+        (float(geom.channel_x[0]), float(geom.channel_x[-1])),
+        cavities,
+        manifest.add(outdir / "wavefield_velocity_context.png"),
+        effective_velocity=vr_eff,
+        velocity_info=velocity_info,
+        **opts,
+    )
+    if getattr(args, "wavefield_mode", "single-shot") == "multi-shot":
+        print(f"multi-shot wavefield 选择炮号: {shot_indices}")
+        if animate:
+            animate_multishot_kinematic_wavefield(
+                geom,
+                cavities,
+                shot_indices,
+                vr_eff,
+                manifest.add(outdir / "multishot_kinematic_wavefield.gif"),
+                t0=cfg.record.t0,
+                n_frames=args.frames,
+                fps=args.fps,
+                shot_interval=args.wavefield_shot_interval,
+                save=bool(opts["save"]),
+                show=bool(opts["show"]),
+                velocity_info=velocity_info,
+            )
+            print("已生成 multishot_kinematic_wavefield.gif：多炮顺序激发示意，不是多炮联合反演。")
+        else:
+            outputs = plot_multishot_wavefield_frames(
+                geom,
+                cavities,
+                shot_indices,
+                vr_eff,
+                outdir,
+                t0=cfg.record.t0,
+                save=bool(opts["save"]),
+                show=bool(opts["show"]),
+                dpi=int(opts["dpi"]),
+                velocity_info=velocity_info,
+            )
+            for output in outputs:
+                manifest.add(output)
+            print("未启用 --animate：multi-shot 只输出每个选中炮的一张代表性关键帧，避免大量单帧。")
+    elif animate:
         animate_kinematic_wavefield(
             geom,
             cavities,
             shot_index,
-            cfg.effective_rayleigh_velocity(),
-            outdir / "kinematic_wavefield.gif",
+            vr_eff,
+            manifest.add(outdir / "kinematic_wavefield.gif"),
             t0=cfg.record.t0,
             n_frames=args.frames,
             fps=args.fps,
             save=bool(opts["save"]),
             show=bool(opts["show"]),
+            velocity_info=velocity_info,
         )
         print("已生成 kinematic_wavefield.gif：时间从震源激发连续推进，异常体散射只在 S→D 到时之后出现。")
     else:
-        frame_save = bool(opts["save"]) or (not bool(args.no_save) and not bool(opts["show"]))
+        frame_save = bool(opts["save"])
+        frame_paths = [
+            outdir / "wavefield_frame_early.png",
+            outdir / "wavefield_frame_hit_cavity.png",
+            outdir / "wavefield_frame_scattered.png",
+        ]
         plot_kinematic_wavefield_frames(
             geom,
             cavities,
             shot_index,
-            cfg.effective_rayleigh_velocity(),
+            vr_eff,
             outdir,
             t0=cfg.record.t0,
             save=frame_save,
             show=bool(opts["show"]),
             dpi=int(opts["dpi"]),
+            velocity_info=velocity_info,
         )
+        for frame_path in frame_paths:
+            manifest.add(frame_path, enabled=frame_save)
         print("未启用 --animate：已输出/显示三个等效运动学关键帧。")
         print("early: 直达波刚离开震源，散射波不应出现。")
         print("hit_cavity: 直达波前接近/到达第一个异常体。")
         print("scattered: 异常体散射波已开始从异常体位置向外传播。")
-    save_run_parameters(cfg, outdir, bool(opts["save"]))
+    if bool(args.save_extra):
+        save_run_parameters(cfg, outdir, bool(opts["save"]))
+        manifest.add(outdir / "run_parameters.json")
     print("说明：该波场是等效运动学传播示意，不是严格弹性波场快照。")
+    manifest.write_and_print()
 
 
 def run_path(args: argparse.Namespace) -> None:
     cfg = prepare_road_void_config(args, "path")
-    outdir = command_outdir(args, "path")
-    opts = output_options(args)
+    outdir, opts, manifest = prepare_output_dir(args, "path")
     ds = simulate_from_config(cfg)
     geom = ds.geometry
     cavities = cfg.to_cavities()
@@ -767,7 +951,7 @@ def run_path(args: argparse.Namespace) -> None:
     cavity = cavities[0]
     shot_index = min(range(geom.n_shots), key=lambda i: abs(geom.shot_x[i] - cavity.x0))
     channel_index = min(range(geom.n_channels), key=lambda i: abs(geom.channel_x[i] - cavity.x0))
-    plot_diffraction_path_demo(geom, cavity, shot_index, channel_index, outdir / "diffraction_path_formula.png", **opts)
+    plot_diffraction_path_demo(geom, cavity, shot_index, channel_index, manifest.add(outdir / "diffraction_path_formula.png"), **opts)
     plot_shot_gather(
         ds.data,
         geom,
@@ -775,28 +959,33 @@ def run_path(args: argparse.Namespace) -> None:
         direct_times=ds.direct_times,
         diffraction_times=ds.diffraction_times[0],
         title="直达波与绕射波理论曲线叠加",
-        output=outdir / "path_gather_curves.png",
+        output=manifest.add(outdir / "path_gather_curves.png"),
         **opts,
     )
-    save_run_parameters(cfg, outdir, bool(opts["save"]))
+    if bool(args.save_extra):
+        save_run_parameters(cfg, outdir, bool(opts["save"]))
+        manifest.add(outdir / "run_parameters.json")
+    manifest.write_and_print()
 
 
 def run_scan(args: argparse.Namespace) -> None:
     cfg = prepare_road_void_config(args, "scan")
-    outdir = command_outdir(args, "scan")
-    opts = output_options(args)
+    outdir, opts, manifest = prepare_output_dir(args, "scan")
     wf = run_location_workflow(cfg)
     geom = wf.dataset.geometry
     cavities = cfg.to_cavities()
     shot_index = geom.n_shots // 2 if not cavities else min(range(geom.n_shots), key=lambda i: abs(geom.shot_x[i] - cavities[0].x0))
     best = wf.scan_result.best
     best_times = geom.diffraction_times((best.x0, best.y0, best.h), best.velocity, wf.velocity_fit.t0)
-    plot_shot_gather(wf.residual, geom, shot_index, diffraction_times=best_times, title="残差记录与最佳三维绕射曲线", output=outdir / "scan_residual_best_curve.png", **opts)
+    plot_shot_gather(wf.residual, geom, shot_index, diffraction_times=best_times, title="残差记录与最佳三维绕射曲线", output=manifest.add(outdir / "scan_residual_best_curve.png"), **opts)
     true_x = cavities[0].x0 if cavities else None
     true_y = cavities[0].y0 if cavities else None
     true_h = cavities[0].h if cavities else None
-    plot_score_slices(wf.scan_result, true_x=true_x, true_y=true_y, true_h=true_h, output=outdir / "scan_score_slices.png", **opts)
-    plot_multishot_scan_diagnostics(wf.scan_result, outdir, **opts)
+    plot_score_slices(wf.scan_result, true_x=true_x, true_y=true_y, true_h=true_h, output=manifest.add(outdir / "scan_score_slices.png"), **opts)
+    if bool(args.save_extra):
+        plot_multishot_scan_diagnostics(wf.scan_result, outdir, **opts)
+        for name in ("per_shot_best_x.png", "per_shot_score_contribution.png", "single_shot_vs_joint.png"):
+            manifest.add(outdir / name)
     fit = wf.velocity_fit
     print(f"直达波拟合: VR={fit.velocity:.1f} m/s, t0={fit.t0:.4f} s, RMS={fit.residual_rms:.4f} s")
     print(f"最佳疑似异常体: x={best.x0:.1f} m, y={best.y0:.1f} m, h={best.h:.1f} m, VR={best.velocity:.1f} m/s, score={best.score:.4f}")
@@ -808,7 +997,10 @@ def run_scan(args: argparse.Namespace) -> None:
         print(f"best x/y/h = {best.x0:.1f} / {best.y0:.1f} / {best.h:.1f}")
         print(f"单炮结果离散程度：x_std={c['x_std']:.2f}, y_std={c['y_std']:.2f}, h_std={c['h_std']:.2f}")
         print("解释：多炮联合通常让 x 更稳定，但单侧 DAS 下 y-h 耦合仍然存在。")
-    save_run_parameters(cfg, outdir, bool(opts["save"]))
+    if bool(args.save_extra):
+        save_run_parameters(cfg, outdir, bool(opts["save"]))
+        manifest.add(outdir / "run_parameters.json")
+    manifest.write_and_print()
 
 
 def run_sensitivity(args: argparse.Namespace) -> None:
@@ -823,23 +1015,25 @@ def run_tutorial(args: argparse.Namespace) -> None:
     """生成一套不重复的教学流程图：几何、正演、扫描评分和可选动画。"""
 
     cfg = prepare_road_void_config(args, "tutorial")
-    outdir = command_outdir(args, "tutorial")
-    opts = output_options(args)
+    outdir, opts, manifest = prepare_output_dir(args, "tutorial")
     geom = cfg.to_geometry()
     cavities = cfg.to_cavities()
-    plot_geometry_plan_and_sections(geom, cavities, outdir / "01_geometry_plan_sections.png", **opts)
+    plot_geometry_plan_and_sections(geom, cavities, manifest.add(outdir / "01_geometry_plan_sections.png"), **opts)
     ds = simulate_from_config(cfg)
     shot_index = geom.n_shots // 2 if not cavities else min(range(geom.n_shots), key=lambda i: abs(geom.shot_x[i] - cavities[0].x0))
-    plot_shot_gather(ds.data, geom, shot_index, direct_times=ds.direct_times, diffraction_times=ds.diffraction_times[0] if ds.diffraction_times else None, title="02 正演 shot gather", output=outdir / "02_forward_gather.png", **opts)
+    plot_shot_gather(ds.data, geom, shot_index, direct_times=ds.direct_times, diffraction_times=ds.diffraction_times[0] if ds.diffraction_times else None, title="02 正演 shot gather", output=manifest.add(outdir / "02_forward_gather.png"), **opts)
     wf = run_location_workflow(cfg)
     best = wf.scan_result.best
     best_times = geom.diffraction_times((best.x0, best.y0, best.h), best.velocity, wf.velocity_fit.t0)
-    plot_shot_gather(wf.residual, geom, shot_index, diffraction_times=best_times, title="03 残差与最佳绕射曲线", output=outdir / "03_scan_residual_best_curve.png", **opts)
-    plot_score_slices(wf.scan_result, true_x=cavities[0].x0 if cavities else None, true_y=cavities[0].y0 if cavities else None, true_h=cavities[0].h if cavities else None, output=outdir / "04_scan_score_slices.png", **opts)
+    plot_shot_gather(wf.residual, geom, shot_index, diffraction_times=best_times, title="03 残差与最佳绕射曲线", output=manifest.add(outdir / "03_scan_residual_best_curve.png"), **opts)
+    plot_score_slices(wf.scan_result, true_x=cavities[0].x0 if cavities else None, true_y=cavities[0].y0 if cavities else None, true_h=cavities[0].h if cavities else None, output=manifest.add(outdir / "04_scan_score_slices.png"), **opts)
     if cavities and bool(args.animate) and not bool(args.no_animate):
-        animate_kinematic_wavefield(geom, cavities, shot_index, cfg.effective_rayleigh_velocity(), outdir / "05_kinematic_wavefield.gif", save=bool(opts["save"]), show=False)
-    save_run_parameters(cfg, outdir, bool(opts["save"]))
+        animate_kinematic_wavefield(geom, cavities, shot_index, cfg.effective_rayleigh_velocity(), manifest.add(outdir / "05_kinematic_wavefield.gif"), save=bool(opts["save"]), show=False, velocity_info=velocity_plot_info(cfg))
+    if bool(args.save_extra):
+        save_run_parameters(cfg, outdir, bool(opts["save"]))
+        manifest.add(outdir / "run_parameters.json")
     print(f"教学流程完成。最佳疑似异常体: x={best.x0:.1f}, y={best.y0:.1f}, h={best.h:.1f}")
+    manifest.write_and_print()
 
 
 def run_workflow(args: argparse.Namespace) -> None:
@@ -851,8 +1045,7 @@ def run_workflow(args: argparse.Namespace) -> None:
     """
 
     cfg = prepare_road_void_config(args, "workflow")
-    outdir = command_outdir(args, "workflow")
-    opts = output_options(args)
+    outdir, opts, manifest = prepare_output_dir(args, "workflow")
     geom = cfg.to_geometry()
     cavities = cfg.to_cavities()
 
@@ -864,13 +1057,13 @@ def run_workflow(args: argparse.Namespace) -> None:
     plot_geometry_plan_and_sections(
         geom,
         cavities,
-        outdir / "01_geometry_plan_sections.png",
+        manifest.add(outdir / "01_geometry_plan_sections.png"),
         **opts,
     )
     plot_road_geometry_3d(
         geom,
         cavities,
-        outdir / "01_geometry_3d.png",
+        manifest.add(outdir / "01_geometry_3d.png"),
         **opts,
     )
     print("坐标说明：x 沿道路/光纤方向，y 横穿道路方向，z 为深度；光纤位于 y=0，锤击线位于 y=W。")
@@ -888,7 +1081,7 @@ def run_workflow(args: argparse.Namespace) -> None:
         cfg.to_velocity_model(),
         (float(geom.channel_x[0]), float(geom.channel_x[-1])),
         cavities,
-        outdir / "02_velocity_model.png",
+        manifest.add(outdir / "02_velocity_model.png"),
         effective_velocity=vr_eff,
         velocity_info=velocity_plot_info(cfg),
         **opts,
@@ -907,7 +1100,7 @@ def run_workflow(args: argparse.Namespace) -> None:
         direct_times=dataset.direct_times,
         diffraction_times=dataset.diffraction_times[0] if dataset.diffraction_times else None,
         title="03 正演 shot gather：直达波与绕射/散射事件",
-        output=outdir / "03_forward_gather.png",
+        output=manifest.add(outdir / "03_forward_gather.png"),
         **opts,
     )
 
@@ -922,7 +1115,7 @@ def run_workflow(args: argparse.Namespace) -> None:
             cavity,
             shot_index,
             channel_index,
-            outdir / "04_diffraction_path.png",
+            manifest.add(outdir / "04_diffraction_path.png"),
             **opts,
         )
         plot_shot_gather(
@@ -932,7 +1125,7 @@ def run_workflow(args: argparse.Namespace) -> None:
             direct_times=dataset.direct_times,
             diffraction_times=dataset.diffraction_times[0] if dataset.diffraction_times else None,
             title="04 直达波与绕射波理论曲线叠加",
-            output=outdir / "04_gather_with_curves.png",
+            output=manifest.add(outdir / "04_gather_with_curves.png"),
             **opts,
         )
     else:
@@ -950,7 +1143,7 @@ def run_workflow(args: argparse.Namespace) -> None:
         shot_index,
         diffraction_times=best_times,
         title="05 残差记录与最佳三维绕射曲线",
-        output=outdir / "05_residual_best_curve.png",
+        output=manifest.add(outdir / "05_residual_best_curve.png"),
         **opts,
     )
     plot_score_slices(
@@ -958,10 +1151,13 @@ def run_workflow(args: argparse.Namespace) -> None:
         true_x=cavities[0].x0 if cavities else None,
         true_y=cavities[0].y0 if cavities else None,
         true_h=cavities[0].h if cavities else None,
-        output=outdir / "05_scan_score_slices.png",
+        output=manifest.add(outdir / "05_scan_score_slices.png"),
         **opts,
     )
-    plot_multishot_scan_diagnostics(scan, outdir, **opts)
+    if bool(args.save_extra):
+        plot_multishot_scan_diagnostics(scan, outdir, **opts)
+        for name in ("per_shot_best_x.png", "per_shot_score_contribution.png", "single_shot_vs_joint.png"):
+            manifest.add(outdir / name)
     print(f"直达波拟合 VR = {fit.velocity:.1f} m/s")
     print(f"拟合 t0 = {fit.t0:.4f} s, RMS = {fit.residual_rms:.4f} s")
     print(f"最佳疑似异常体 x/y/h/VR = {best.x0:.1f} / {best.y0:.1f} / {best.h:.1f} / {best.velocity:.1f}")
@@ -982,12 +1178,13 @@ def run_workflow(args: argparse.Namespace) -> None:
             cavities,
             shot_index,
             vr_eff,
-            outdir / "06_kinematic_wavefield.gif",
+            manifest.add(outdir / "06_kinematic_wavefield.gif"),
             t0=cfg.record.t0,
             n_frames=args.frames,
             fps=args.fps,
             save=bool(opts["save"]),
             show=bool(opts["show"]),
+            velocity_info=velocity_plot_info(cfg),
         )
         print("已生成 06_kinematic_wavefield.gif。该动画是等效运动学传播示意，不是严格弹性波场快照。")
     else:
@@ -998,21 +1195,23 @@ def run_workflow(args: argparse.Namespace) -> None:
         print("输出为 outputs/workflow/06_kinematic_wavefield.gif；该动画是等效运动学传播示意，不是严格弹性波场快照。")
 
     print("\nStep 7：结果总结。")
-    save_run_parameters(cfg, outdir, bool(opts["save"]))
+    if bool(args.save_extra):
+        save_run_parameters(cfg, outdir, bool(opts["save"]))
+        manifest.add(outdir / "run_parameters.json")
     print("本次流程完成。")
     print(f"速度总结：velocity-mode={cfg.velocity.velocity_model_type}, VR_eff={vr_eff:.1f} m/s。")
     print(f"扫描总结：scan-mode={cfg.processing.scan_mode}，当前扫描默认定位主异常；多异常联合反演可后续用迭代减去方式扩展。")
     print(f"异常体总结：本次异常体数量={len(cavities)}，shape 仅表示等效散射几何，不是真实弹性边界散射。")
     print("本方法输出的是疑似异常范围，不是直接确诊空洞。")
     print("真实数据应用前仍需光纤路径标定、锤击触发校正、通道耦合 QC、浅层速度估计和管线/井盖干扰核查。")
+    manifest.write_and_print()
 
 
 def run_elastic3d_command(args: argparse.Namespace) -> None:
     """运行小尺度 3D elastic FDTD 原型，不替代默认运动学 workflow。"""
 
     road_cfg = prepare_road_void_config(args, "elastic3d")
-    outdir = command_outdir(args, "elastic3d")
-    opts = output_options(args)
+    outdir, opts, manifest = prepare_output_dir(args, "elastic3d")
     cavities = None
     if not args.elastic_no_anomaly:
         cavities = road_cfg.to_cavities()
@@ -1045,13 +1244,26 @@ def run_elastic3d_command(args: argparse.Namespace) -> None:
     print(f"CFL number = {result.cfl:.3f}，满足稳定条件。")
     print(f"gather shape = {result.gather.shape} = time x receiver")
     plot_elastic3d_outputs(result, outdir, save=bool(opts["save"]), show=bool(opts["show"]), dpi=int(opts["dpi"]))
-    if bool(opts["save"]) and cfg.abc == "cpml":
+    for name in (
+        "velocity_model_slice.png",
+        "wavefield_snapshot_early.png",
+        "wavefield_snapshot_mid.png",
+        "wavefield_snapshot_late.png",
+        f"elastic3d_gather_{cfg.record_component}.png",
+    ):
+        manifest.add(outdir / name)
+    if cfg.record_component == "vz":
+        manifest.add(outdir / "elastic3d_gather.png")
+    if bool(opts["save"]) and cfg.abc == "cpml" and bool(args.save_extra):
         plot_abc_comparison(cfg, outdir, save=True, show=False, dpi=int(opts["dpi"]))
+        manifest.add(outdir / "abc_compare_sponge_vs_cpml.png")
         print("已输出 abc_compare_sponge_vs_cpml.png，用于边界吸收 sanity check。")
     if bool(args.animate) and not bool(args.no_animate):
         animate_elastic3d_wavefield(result, outdir, save=bool(opts["save"]), show=bool(opts["show"]), fps=args.fps)
+        manifest.add(outdir / "elastic3d_wavefield.gif")
         print("已生成 elastic3d_wavefield.gif。")
     print("输出: velocity_model_slice.png, wavefield_snapshot_*.png, elastic3d_gather_<component>.png；--animate 时额外输出 elastic3d_wavefield.gif。")
+    manifest.write_and_print()
 
 
 def run_fwi_demo(args: argparse.Namespace) -> None:
@@ -1094,8 +1306,7 @@ def run_fwi_demo(args: argparse.Namespace) -> None:
 def run_numerics_demo(args: argparse.Namespace) -> None:
     """运行 FEM/SEM/BEM 高级数值方法教学原型。"""
 
-    outdir = command_outdir(args, "numerics")
-    opts = output_options(args)
+    outdir, opts, manifest = prepare_output_dir(args, "numerics")
     methods = ["fem", "sem", "bem"] if args.method == "all" else [args.method]
     print("numerics-demo：高级数值方法教学/研究原型，不替代默认 workflow。")
     print(f"method = {args.method}; 输出目录 = {outdir}")
@@ -1110,6 +1321,8 @@ def run_numerics_demo(args: argparse.Namespace) -> None:
                 show=bool(opts["show"]),
                 dpi=int(opts["dpi"]),
             )
+            manifest.add(outdir / "fem1d_wavefield.png")
+            manifest.add(outdir / "fem1d_receiver_trace.png")
             print(f"FEM 1D 完成：nodes={result.x.size}, snapshots={result.snapshots.shape}, receiver_samples={result.receiver_trace.size}")
         elif method == "sem":
             result = run_sem1d_wave_demo(
@@ -1121,6 +1334,8 @@ def run_numerics_demo(args: argparse.Namespace) -> None:
                 show=bool(opts["show"]),
                 dpi=int(opts["dpi"]),
             )
+            manifest.add(outdir / "sem1d_wavefield.png")
+            manifest.add(outdir / "sem1d_receiver_trace.png")
             print(f"SEM 1D 完成：nodes={result.x.size}, GLL/order_nodes={result.gll_nodes.size}, receiver_samples={result.receiver_trace.size}")
         elif method == "bem":
             result = run_bem2d_scatter_demo(
@@ -1129,15 +1344,17 @@ def run_numerics_demo(args: argparse.Namespace) -> None:
                 show=bool(opts["show"]),
                 dpi=int(opts["dpi"]),
             )
+            manifest.add(outdir / "bem2d_boundary_points.png")
+            manifest.add(outdir / "bem2d_scattered_response.png")
             print(f"BEM 2D 完成：boundary_points={result.boundary.shape[0]}, receivers={result.receivers.shape[0]}")
     print("说明：FEM/SEM/BEM 均为标量低维教学原型，不是完整三维弹性模拟。")
+    manifest.write_and_print()
 
 
 def run_numerics_compare(args: argparse.Namespace) -> None:
     """运行 FDTD/FEM/SEM 统一 1D 标量波 benchmark。"""
 
-    outdir = command_outdir(args, "numerics")
-    opts = output_options(args)
+    outdir, opts, manifest = prepare_output_dir(args, "numerics")
     print("numerics-compare：统一 1D homogeneous scalar wave benchmark。")
     print(
         f"L={args.numerics_length:.1f} m, c={args.numerics_velocity:.1f} m/s, "
@@ -1165,6 +1382,9 @@ def run_numerics_compare(args: argparse.Namespace) -> None:
         print(f"  {key}: {value:.6g}" if isinstance(value, float) else f"  {key}: {value}")
     print("输出: compare_1d_traces.png, compare_1d_wavefields.png, compare_1d_metrics.json。")
     print("说明：该 benchmark 是低维标量波教学对比，不代表三维弹性道路空洞正演。")
+    for name in ("compare_1d_traces.png", "compare_1d_wavefields.png", "compare_1d_metrics.json"):
+        manifest.add(outdir / name)
+    manifest.write_and_print()
 
 
 def run_all(args: argparse.Namespace) -> None:
@@ -1200,6 +1420,7 @@ def build_parser() -> argparse.ArgumentParser:
             add_scan_args(p)
         if name in {"wavefield", "tutorial", "workflow", "all"}:
             add_animation_args(p)
+            add_wavefield_args(p)
         if name == "elastic3d":
             add_elastic3d_args(p)
             add_animation_args(p)

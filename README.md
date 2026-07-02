@@ -127,6 +127,8 @@ LOCAL_ANOMALY_PARAMS = dict(
 ```bash
 --save       保存图件
 --no-save    不保存图件
+--save-extra 保存诊断图、对比图、中间图和 run_parameters.json
+--clean-output 运行前只清理当前 outdir 中的旧图/旧清单
 --show       弹出 matplotlib 交互窗口
 --no-show    不显示窗口
 --outdir     指定输出目录
@@ -158,7 +160,7 @@ python main.py tutorial --save --outdir outputs/tutorial
 - `outputs/sensitivity/`
 - `outputs/numerics/`
 
-`workflow` 默认保存文件名采用步骤编号，便于按算法顺序阅读：
+`workflow --save` 默认只保存一套代表性结果，文件名采用步骤编号，便于按算法顺序阅读：
 
 ```text
 outputs/workflow/01_geometry_plan_sections.png
@@ -169,8 +171,15 @@ outputs/workflow/04_diffraction_path.png
 outputs/workflow/04_gather_with_curves.png
 outputs/workflow/05_residual_best_curve.png
 outputs/workflow/05_scan_score_slices.png
-outputs/workflow/06_kinematic_wavefield.gif  # 仅 --animate --save 时生成
 ```
+
+默认不会保存多炮诊断图、`run_parameters.json` 或 GIF。需要额外诊断图时显式加：
+
+```bash
+python main.py workflow --save --save-extra
+```
+
+每次保存运行会打印“本次实际生成文件”，并写入当前输出目录的 `output_manifest.txt`。若担心旧图混淆，可加 `--clean-output`；它只清理当前 `outdir` 中的旧结果文件，不会删除整个 `outputs/`。
 
 `outputs/workflow/02_velocity_model.png` 是当前运动学正演/扫描使用的等效速度模型展示：
 
@@ -186,12 +195,13 @@ python main.py workflow --animate --save
 python main.py wavefield --animate --save
 ```
 
-如果运行 `python main.py wavefield --save` 而不加 `--animate`，会输出三张关键帧：
+如果运行 `python main.py wavefield --save` 而不加 `--animate`，会输出三张关键帧和一个速度上下文图：
 
 ```text
 outputs/wavefield/wavefield_frame_early.png
 outputs/wavefield/wavefield_frame_hit_cavity.png
 outputs/wavefield/wavefield_frame_scattered.png
+outputs/wavefield/wavefield_velocity_context.png
 ```
 
 这些图和 GIF 都是“等效运动学传播示意”，用于理解直达波前、异常体散射触发时刻和 DAS 接收线位置，不是完整弹性波场快照。当前实现中散射波只有在直达波从震源传播到异常体之后才出现，三张关键帧含义为：
@@ -199,6 +209,28 @@ outputs/wavefield/wavefield_frame_scattered.png
 - `early`：直达波刚离开震源，异常体散射不应出现；
 - `hit_cavity`：直达波前接近或到达第一个异常体；
 - `scattered`：异常体散射波已经从异常体位置向外传播。
+
+wavefield 与速度模式的关系：
+
+- `velocity-mode=uniform`：wavefield 使用原始 `VR`；
+- `velocity-mode=layered-effective`：wavefield 使用层状速度折算出的 `VR_eff`。
+
+但 layered-effective wavefield 仍是 x-y 平面等效运动学波场，波前会像均匀介质一样扩散；它只是使用 `VR_eff` 改变传播半径和到时，并在 `wavefield_velocity_context.png` 中显示分层速度背景。不要把它解释为严格分层介质弹性波场。真正的分层全波场现象应使用 `elastic3d` 或后续更严格的数值方法检查。
+
+多炮 wavefield 只在显式请求时生成：
+
+```bash
+python main.py wavefield --wavefield-mode multi-shot --wavefield-shot-indices 0,5,10 --save
+python main.py wavefield --wavefield-mode multi-shot --animate --save
+```
+
+不加 `--animate` 时，每个选中炮只输出一张代表性关键帧；加 `--animate` 时输出：
+
+```text
+outputs/wavefield/multishot_kinematic_wavefield.gif
+```
+
+multi-shot wavefield 是多炮覆盖的传播示意，帮助理解炮点位置如何变化；真正用于定位的是 `scan-mode=joint` 的多炮联合评分。不要把 multi-shot wavefield 称为多炮联合反演。
 
 ## 常用参数
 

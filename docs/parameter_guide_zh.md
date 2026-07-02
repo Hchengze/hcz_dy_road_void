@@ -142,10 +142,52 @@ lambda = VR / f
 - `--save`：保存图件；
 - `--show`：交互显示；
 - `--no-save`：不保存；
+- `--save-extra`：保存诊断图、对比图、中间图和 `run_parameters.json`。默认只保存当前子命令必要图件，避免输出过多；
+- `--clean-output`：运行前清理当前 `outdir` 里的旧结果文件，只影响当前子目录，不会清理整个 `outputs/`；
 - `--outdir`：输出目录；
 - `--dpi`：图片分辨率。
 
 建议本地调参用 `--show --no-save`，汇报出图用 `--save --outdir outputs/<功能名>`。
+
+每次保存运行会打印本次实际生成文件，并在当前输出目录写入 `output_manifest.txt`。如果某个目录中历史图很多，建议使用 `--clean-output` 避免把旧图误认为新结果。
+
+## wavefield 参数
+
+默认单炮：
+
+```bash
+python main.py wavefield --save
+```
+
+输出三个关键帧和一个速度上下文图。速度逻辑为：
+
+- `velocity-mode=uniform`：wavefield 使用原始 `VR`；
+- `velocity-mode=layered-effective`：wavefield 使用折算后的 `VR_eff`。
+
+注意：layered-effective wavefield 仍是等效运动学示意，不是严格分层介质弹性波场；图中的分层速度只说明 `VR_eff` 的来源。
+
+多炮示意参数：
+
+- `--wavefield-mode single-shot/multi-shot`：单炮或多炮顺序激发；
+- `--wavefield-shot-index`：单炮模式的炮号；
+- `--wavefield-shot-indices`：多炮显式炮号列表，例如 `0,5,10`；
+- `--wavefield-max-shots`：最多展示几炮；
+- `--wavefield-shot-step`：自动选炮时的炮间隔；
+- `--wavefield-shot-interval`：GIF 中相邻炮的示意全局时间间隔。
+
+多炮关键帧：
+
+```bash
+python main.py wavefield --wavefield-mode multi-shot --wavefield-shot-indices 0,5,10 --save
+```
+
+多炮 GIF：
+
+```bash
+python main.py wavefield --wavefield-mode multi-shot --animate --save
+```
+
+multi-shot wavefield 用于理解多炮覆盖，不等于 `scan-mode=joint` 的多炮联合定位。
 
 ## 小尺度 3D elastic FDTD 参数
 

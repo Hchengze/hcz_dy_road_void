@@ -10,6 +10,7 @@ import numpy as np
 
 import main
 from main import build_args_from_local_config, build_parser, build_road_void_config_from_args, config_from_args
+from road_void.visualization import compute_direct_wavefield_snapshot
 from road_void.workflow import simulate_from_config
 
 
@@ -210,6 +211,30 @@ def test_wavefield_save_generates_physical_key_frames():
     assert (outdir / "wavefield_frame_early.png").exists()
     assert (outdir / "wavefield_frame_hit_cavity.png").exists()
     assert (outdir / "wavefield_frame_scattered.png").exists()
+    assert (outdir / "wavefield_velocity_context.png").exists()
+    assert (outdir / "output_manifest.txt").exists()
+
+
+def test_layered_effective_wavefield_uses_effective_velocity_in_radius():
+    parser = build_parser()
+    uniform_args = parser.parse_args(["wavefield", "--velocity-mode", "uniform", "--no-save"])
+    layered_args = parser.parse_args(["wavefield", "--velocity-mode", "layered-effective", "--layer-velocities", "180,240,320", "--no-save"])
+    uniform_cfg = build_road_void_config_from_args(uniform_args)
+    layered_cfg = build_road_void_config_from_args(layered_args)
+    geom = uniform_cfg.to_geometry()
+    x = np.linspace(float(geom.channel_x[0]), float(geom.channel_x[-1]), 8)
+    y = np.linspace(geom.fiber_y, float(geom.shot_y), 6)
+    xx, yy = np.meshgrid(x, y)
+    _, radius_uniform = compute_direct_wavefield_snapshot(geom, 0, uniform_cfg.effective_rayleigh_velocity(), 0.12, uniform_cfg.record.t0, xx, yy, 1.0)
+    _, radius_layered = compute_direct_wavefield_snapshot(geom, 0, layered_cfg.effective_rayleigh_velocity(), 0.12, layered_cfg.record.t0, xx, yy, 1.0)
+    assert layered_cfg.effective_rayleigh_velocity() != uniform_cfg.effective_rayleigh_velocity()
+    assert radius_layered != radius_uniform
+
+
+def test_wavefield_layered_cli_prints_velocity_mode_and_vreff():
+    completed = _run_cli("wavefield", "--velocity-mode", "layered-effective", "--no-save")
+    assert "velocity_mode=layered-effective" in completed.stdout
+    assert "VR_eff" in completed.stdout
 
 
 def test_workflow_cylinder_anomaly_runs_with_coarse_scan():
@@ -242,6 +267,90 @@ def test_workflow_no_save_does_not_run_sensitivity_or_animation():
     assert "parameter_sensitivity_results.csv" not in completed.stdout
     assert "06_kinematic_wavefield.gif" in completed.stdout
     assert "未生成动画" in completed.stdout
+
+
+def test_workflow_default_saved_png_count_is_controlled():
+    outdir = Path(".tmp_test_outputs/workflow_controlled")
+    completed = _run_cli(
+        "workflow",
+        "--save",
+        "--clean-output",
+        "--outdir",
+        str(outdir),
+        "--scan-x-step",
+        "6",
+        "--scan-y-step",
+        "4",
+        "--scan-h-step",
+        "1.6",
+        "--scan-vr-step",
+        "40",
+    )
+    assert completed.returncode == 0
+    pngs = sorted(p.name for p in outdir.glob("*.png"))
+    assert pngs == [
+        "01_geometry_3d.png",
+        "01_geometry_plan_sections.png",
+        "02_velocity_model.png",
+        "03_forward_gather.png",
+        "04_diffraction_path.png",
+        "04_gather_with_curves.png",
+        "05_residual_best_curve.png",
+        "05_scan_score_slices.png",
+    ]
+    assert not (outdir / "single_shot_vs_joint.png").exists()
+    assert (outdir / "output_manifest.txt").exists()
+
+
+def test_clean_output_only_cleans_current_outdir():
+    outdir = Path(".tmp_test_outputs/clean_current")
+    sibling = Path(".tmp_test_outputs/clean_sibling")
+    outdir.mkdir(parents=True, exist_ok=True)
+    sibling.mkdir(parents=True, exist_ok=True)
+    (outdir / "old.png").write_text("old", encoding="utf-8")
+    (sibling / "keep.png").write_text("keep", encoding="utf-8")
+    _run_cli("geometry", "--save", "--clean-output", "--outdir", str(outdir))
+    assert not (outdir / "old.png").exists()
+    assert (sibling / "keep.png").exists()
+
+
+def test_multishot_wavefield_static_outputs_are_limited():
+    outdir = Path(".tmp_test_outputs/wavefield_multishot_static")
+    completed = _run_cli(
+        "wavefield",
+        "--wavefield-mode",
+        "multi-shot",
+        "--wavefield-shot-indices",
+        "0,5,10",
+        "--save",
+        "--clean-output",
+        "--outdir",
+        str(outdir),
+    )
+    assert "multi-shot wavefield 选择炮号" in completed.stdout
+    frames = sorted(outdir.glob("multishot_frame_shot*.png"))
+    assert len(frames) == 3
+    assert not (outdir / "multishot_kinematic_wavefield.gif").exists()
+
+
+def test_multishot_wavefield_animate_generates_single_gif():
+    outdir = Path(".tmp_test_outputs/wavefield_multishot_gif")
+    completed = _run_cli(
+        "wavefield",
+        "--wavefield-mode",
+        "multi-shot",
+        "--wavefield-shot-indices",
+        "0,5",
+        "--animate",
+        "--frames",
+        "6",
+        "--save",
+        "--clean-output",
+        "--outdir",
+        str(outdir),
+    )
+    assert completed.returncode == 0
+    assert (outdir / "multishot_kinematic_wavefield.gif").exists()
 
 
 def test_workflow_and_scan_share_parameter_mapping():

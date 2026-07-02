@@ -638,6 +638,7 @@ def animate_kinematic_wavefield(
     fps: int = 10,
     save: bool = True,
     show: bool = False,
+    velocity_info: dict[str, object] | None = None,
 ) -> None:
     """生成等效运动学波场 GIF，展示直达波前与异常体散射波前。
 
@@ -659,7 +660,9 @@ def animate_kinematic_wavefield(
 
     fig, ax = plt.subplots(figsize=(8.8, 5.4))
 
-    def draw_frame(frame_time: float) -> list[object]:
+    title_note = _wavefield_velocity_note(velocity_info)
+
+    def draw_frame(frame_time: float, global_time: float | None = None) -> list[object]:
         ax.clear()
         direct, direct_radius = compute_direct_wavefield_snapshot(geometry, source_index, velocity, frame_time, t0, xx, yy, sigma)
         scatter, fronts = compute_scattered_wavefield_snapshot(geometry, cavities, source_index, velocity, frame_time, t0, xx, yy, sigma)
@@ -688,7 +691,8 @@ def animate_kinematic_wavefield(
         ax.set_aspect("equal", adjustable="box")
         ax.set_xlabel("x 沿道路方向 (m)")
         ax.set_ylabel("y 横穿道路方向 (m)")
-        ax.set_title(f"等效运动学传播示意，不是严格弹性波场快照；t={frame_time:.3f} s")
+        time_text = f"t={frame_time:.3f} s" if global_time is None else f"global_time={global_time:.3f} s, local_t={frame_time:.3f} s"
+        ax.set_title(f"等效运动学传播示意（非弹性波场）；{time_text}\n{title_note}", fontsize=10)
         ax.legend(loc="upper right", fontsize=8)
         return [im]
 
@@ -716,6 +720,7 @@ def plot_kinematic_wavefield_frames(
     save: bool = True,
     show: bool = False,
     dpi: int = 180,
+    velocity_info: dict[str, object] | None = None,
 ) -> None:
     """输出等效运动学波场的三个关键静态帧。
 
@@ -739,6 +744,7 @@ def plot_kinematic_wavefield_frames(
             save=save,
             show=show,
             dpi=dpi,
+            velocity_info=velocity_info,
         )
 
 
@@ -753,6 +759,7 @@ def _plot_single_wavefield_frame(
     save: bool,
     show: bool,
     dpi: int,
+    velocity_info: dict[str, object] | None = None,
 ) -> None:
     sx, sy, _ = geometry.shot_xyz[source_index]
     x, y, xx, yy = _wavefield_grid(geometry)
@@ -777,6 +784,142 @@ def _plot_single_wavefield_frame(
     plt.xlim(x[0], x[-1])
     plt.ylim(y[0], y[-1])
     plt.gca().set_aspect("equal", adjustable="box")
-    plt.title(f"等效运动学传播示意，不是严格弹性波场快照；t={frame_time:.3f} s")
+    note = _wavefield_velocity_note(velocity_info)
+    plt.title(f"等效运动学传播示意（非弹性波场）；t={frame_time:.3f} s\n{note}", fontsize=10)
     plt.legend(loc="upper right")
     _finish_figure(output, save=save, show=show, dpi=dpi)
+
+
+def plot_multishot_wavefield_frames(
+    geometry: RoadGeometry,
+    cavities: list[Cavity],
+    shot_indices: list[int],
+    velocity: float,
+    outdir: str | Path,
+    t0: float = 0.02,
+    save: bool = True,
+    show: bool = False,
+    dpi: int = 180,
+    velocity_info: dict[str, object] | None = None,
+) -> list[Path]:
+    """输出少量多炮波场关键帧。
+
+    每个炮点只输出一张“散射已展开”的代表性图，避免 multi-shot 模式默认
+    生成大量单帧。它只是多炮覆盖的传播示意，不是多炮联合反演。
+    """
+
+    if not cavities:
+        return []
+    outdir = Path(outdir)
+    written: list[Path] = []
+    for shot_index in shot_indices:
+        frame_time = _wavefield_frame_times(geometry, cavities, shot_index, velocity, t0)["wavefield_frame_scattered.png"]
+        output = outdir / f"multishot_frame_shot{shot_index:03d}.png"
+        _plot_single_wavefield_frame(
+            geometry,
+            cavities,
+            shot_index,
+            velocity,
+            frame_time,
+            output,
+            t0=t0,
+            save=save,
+            show=show,
+            dpi=dpi,
+            velocity_info=velocity_info,
+        )
+        written.append(output)
+    return written
+
+
+def animate_multishot_kinematic_wavefield(
+    geometry: RoadGeometry,
+    cavities: list[Cavity],
+    shot_indices: list[int],
+    velocity: float,
+    output: str | Path,
+    t0: float = 0.02,
+    n_frames: int = 48,
+    fps: int = 10,
+    shot_interval: float = 0.25,
+    save: bool = True,
+    show: bool = False,
+    velocity_info: dict[str, object] | None = None,
+) -> None:
+    """生成多炮顺序激发的等效运动学 GIF。
+
+    每一炮使用局部时间从激发到散射展开；GIF 的 global_time 只是教学展示
+    用的顺序时间轴。该动画帮助理解多炮覆盖，不代表多炮联合反演，也不
+    代表严格分层介质弹性波场。
+    """
+
+    if not cavities or not shot_indices:
+        return
+    output = Path(output)
+    if save:
+        output.parent.mkdir(parents=True, exist_ok=True)
+    x, y, xx, yy = _wavefield_grid(geometry)
+    sigma = max(0.8, 0.7 * velocity * geometry.dt * 8.0)
+    title_note = _wavefield_velocity_note(velocity_info)
+    frames_per_shot = max(4, int(np.ceil(n_frames / max(len(shot_indices), 1))))
+    frame_items: list[tuple[int, float, float]] = []
+    for order, shot_index in enumerate(shot_indices):
+        frame_times = _wavefield_frame_times(geometry, cavities, shot_index, velocity, t0)
+        t_end = min(geometry.t_max * 0.8, max(frame_times.values()) + 0.08)
+        for local_time in np.linspace(t0, t_end, frames_per_shot):
+            frame_items.append((shot_index, float(local_time), order * shot_interval + float(local_time - t0)))
+    frame_items = frame_items[:n_frames]
+
+    fig, ax = plt.subplots(figsize=(8.8, 5.4))
+
+    def draw(item: tuple[int, float, float]) -> list[object]:
+        shot_index, local_time, global_time = item
+        ax.clear()
+        direct, direct_radius = compute_direct_wavefield_snapshot(geometry, shot_index, velocity, local_time, t0, xx, yy, sigma)
+        scatter, fronts = compute_scattered_wavefield_snapshot(geometry, cavities, shot_index, velocity, local_time, t0, xx, yy, sigma)
+        field = direct + scatter
+        im = ax.imshow(field, origin="lower", extent=[x[0], x[-1], y[0], y[-1]], aspect="auto", cmap="inferno", vmin=0.0, vmax=max(0.35, float(np.percentile(field, 99.8))))
+        sx, sy, _ = geometry.shot_xyz[shot_index]
+        ax.plot(geometry.channel_x, np.full_like(geometry.channel_x, geometry.fiber_y), "c-", lw=2, label="DAS 光纤")
+        ax.plot(geometry.shot_x, np.full_like(geometry.shot_x, float(geometry.shot_y)), "w.", ms=3, alpha=0.45, label="锤击线")
+        ax.scatter([sx], [sy], s=95, c="lime", edgecolors="k", label=f"当前炮 {shot_index}")
+        ax.add_patch(patches.Circle((sx, sy), direct_radius, fill=False, ec="white", lw=1.4, ls="--", alpha=0.9))
+        for cav, trigger, radius in fronts:
+            _draw_anomaly_plan(ax, cav, None)
+            if radius >= 0:
+                ax.add_patch(patches.Circle((cav.x0, cav.y0), radius, fill=False, ec="deepskyblue", lw=1.4, ls=":", alpha=0.9))
+        ax.set_xlim(x[0], x[-1])
+        ax.set_ylim(y[0], y[-1])
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel("x 沿道路方向 (m)")
+        ax.set_ylabel("y 横穿道路方向 (m)")
+        ax.set_title(
+            f"multi-shot 运动学示意；shot={shot_index}, source_x={sx:.1f} m, global={global_time:.3f}s\n"
+            f"local_t={local_time:.3f}s；{title_note}",
+            fontsize=10,
+        )
+        ax.legend(loc="upper right", fontsize=8)
+        return [im]
+
+    anim = animation.FuncAnimation(fig, lambda i: draw(frame_items[i]), frames=len(frame_items), interval=1000 / fps, blit=False)
+    if save:
+        anim.save(output, writer=animation.PillowWriter(fps=fps))
+    if show:
+        draw(frame_items[min(len(frame_items) // 2, len(frame_items) - 1)])
+        plt.show()
+    else:
+        plt.close(fig)
+
+
+def _wavefield_velocity_note(velocity_info: dict[str, object] | None) -> str:
+    if not velocity_info:
+        return "velocity_mode=unknown"
+    mode = velocity_info.get("velocity_mode", "unknown")
+    vr = float(velocity_info.get("rayleigh_velocity", 0.0))
+    vr_eff = float(velocity_info.get("effective_velocity", vr))
+    if mode == "layered-effective":
+        return (
+            f"layered-effective: VR={vr:.1f}, VR_eff={vr_eff:.1f} m/s；"
+            "非严格分层波场"
+        )
+    return f"uniform: VR={vr:.1f} m/s"
