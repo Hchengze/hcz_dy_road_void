@@ -363,6 +363,12 @@ def validate_config(config: RoadVoidConfig) -> None:
         raise ConfigError("velocity_model_type 只能是 uniform 或 layered-effective。")
     if len(v.layer_depths) != len(v.layer_velocities):
         raise ConfigError("layer_depths 和 layer_velocities 长度必须一致。")
+    if any(depth <= 0 for depth in v.layer_depths):
+        raise ConfigError("layer_depths 必须为正数。")
+    if any(v2 <= 0 for v2 in v.layer_velocities):
+        raise ConfigError("layer_velocities 必须全部为正数。")
+    if any(b <= a for a, b in zip(v.layer_depths, v.layer_depths[1:])):
+        raise ConfigError("layer_depths 必须严格递增。")
     if v.sensitivity_depth_factor <= 0:
         raise ConfigError("sensitivity_depth_factor 必须为正数。")
     if v.rayleigh_velocity <= 0 or v.source_frequency <= 0:
@@ -406,32 +412,45 @@ def _parse_anomaly_specs(
             raise ConfigError(f"异常体格式缺少 shape:values: {raw_item}")
         shape, values_text = raw_item.split(":", 1)
         shape = shape.strip().lower()
-        values = [float(v.strip()) for v in values_text.split(",") if v.strip()]
+        try:
+            values = [float(v.strip()) for v in values_text.split(",") if v.strip()]
+        except ValueError as exc:
+            raise ConfigError(f"异常体参数必须是数值: {raw_item}") from exc
         label = f"{shape}-{idx + 1}"
         if shape == "sphere":
             if len(values) != 5:
                 raise ConfigError("sphere 格式为 sphere:x,y,h,radius,strength。")
             x, y, h, radius, strength = values
+            if radius <= 0:
+                raise ConfigError("sphere radius 必须为正数。")
             anomalies.append(_make_cavity(shape, x, y, h, radius, strength, attenuation_strength, tail_strength, diffraction_strength, label))
         elif shape == "box":
             if len(values) != 7:
                 raise ConfigError("box 格式为 box:x,y,h,size_x,size_y,size_z,strength。")
             x, y, h, sx, sy, sz, strength = values
+            if sx <= 0 or sy <= 0 or sz <= 0:
+                raise ConfigError("box size_x/size_y/size_z 必须为正数。")
             anomalies.append(_make_cavity(shape, x, y, h, max(sx, sy, sz) / 2.0, strength, attenuation_strength, tail_strength, diffraction_strength, label, sx, sy, sz))
         elif shape == "cylinder":
             if len(values) != 6:
                 raise ConfigError("cylinder 格式为 cylinder:x,y,h,radius,height,strength。")
             x, y, h, radius, height, strength = values
+            if radius <= 0 or height <= 0:
+                raise ConfigError("cylinder radius/height 必须为正数。")
             anomalies.append(_make_cavity(shape, x, y, h, radius, strength, attenuation_strength, tail_strength, diffraction_strength, label, radius, radius, height))
         elif shape == "ellipsoid":
             if len(values) != 7:
                 raise ConfigError("ellipsoid 格式为 ellipsoid:x,y,h,size_x,size_y,size_z,strength。")
             x, y, h, sx, sy, sz, strength = values
+            if sx <= 0 or sy <= 0 or sz <= 0:
+                raise ConfigError("ellipsoid size_x/size_y/size_z 必须为正数。")
             anomalies.append(_make_cavity(shape, x, y, h, max(sx, sy, sz) / 2.0, strength, attenuation_strength, tail_strength, diffraction_strength, label, sx, sy, sz))
         elif shape in {"line", "zone"}:
             if len(values) != 6:
                 raise ConfigError("line 格式为 line:x,y,h,length,azimuth,strength。")
             x, y, h, length, azimuth, strength = values
+            if length <= 0:
+                raise ConfigError("line/zone length 必须为正数。")
             anomalies.append(_make_cavity(shape, x, y, h, length / 2.0, strength, attenuation_strength, tail_strength, diffraction_strength, label, length, None, None, azimuth))
         else:
             raise ConfigError(f"未知异常体形状: {shape}")

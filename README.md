@@ -535,6 +535,24 @@ python -m compileall -q road_void examples main.py
 python -m pytest -q
 ```
 
+## 参数组合回归测试
+
+默认参数通过不代表所有研究场景都安全。涉及 workflow、参数、输出、正演、扫描、波场、dataset、diffraction 或 inversion 的修改，建议至少运行 quick matrix：
+
+```bash
+python -m pytest -q -W default
+python tools/check_workflow_matrix.py --quick
+```
+
+扩展组合可用：
+
+```bash
+python -m pytest -q -m slow
+python tools/check_workflow_matrix.py --extended
+```
+
+详细说明见 [docs/testing_strategy_zh.md](docs/testing_strategy_zh.md)。
+
 如需检查代码层面的 Python warning，可使用：
 
 ```bash

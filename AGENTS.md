@@ -515,3 +515,24 @@ git status --short
 ```
 
 如果答案是否定的，就不要为了增加功能而增加功能。
+
+---
+
+## 十六、参数组合回归测试规则
+
+修改 workflow、参数构建、输出路径、正演、扫描、波场、dataset、diffraction 或 inversion 时，不能只跑默认参数。至少运行 quick parameter matrix：
+
+```bash
+python -m pytest -q
+python -m pytest -q -W default
+python tools/check_workflow_matrix.py --quick
+```
+
+如果修改影响异常体 shape、层状速度、扫描边界、短记录、高噪声、wavefield view 或其它极端组合，应额外运行：
+
+```bash
+python -m pytest -q -m slow
+python tools/check_workflow_matrix.py --extended
+```
+
+参数矩阵的目标是捕获默认参数下隐藏不了的问题，例如 RuntimeWarning、NaN/inf、空数组、参数不同步、输出目录分裂和错误参数静默回退。业务诊断可以进入控制台摘要或 `research_report.md`，但代码 warning 不应被全局屏蔽。
